@@ -209,18 +209,41 @@ public final class Config {
     public static boolean writeRoot(JSONObject root) {
         String json = root.toString();
         try {
-            Process p = new ProcessBuilder("su", "-c", "cat > " + PATH)
+            new JSONObject(json);
+            String tmp = PATH + ".tmp." + android.os.Process.myPid();
+            Process p = new ProcessBuilder("su", "-c",
+                    "umask 022; cat > '" + tmp + "' && chmod 644 '" + tmp
+                            + "' && mv -f '" + tmp + "' '" + PATH + "'")
                     .redirectErrorStream(false).start();
             java.io.OutputStream os = p.getOutputStream();
             os.write(json.getBytes(StandardCharsets.UTF_8));
             os.flush();
             os.close();
-            int code = p.waitFor();
-            // ensure perms
-            new ProcessBuilder("su", "-c", "chmod 666 " + PATH).start().waitFor();
-            return code == 0;
+            if (p.waitFor() != 0) return false;
+            String persisted = readRaw();
+            if (persisted == null || !json.equals(persisted)) return false;
+            publishCoordination(root);
+            return true;
         } catch (Throwable t) {
             return false;
+        }
+    }
+
+    private static void publishCoordination(JSONObject root) {
+        try {
+            int panels = 0;
+            JSONObject apps = appsObj(root);
+            java.util.Iterator<String> keys = apps.keys();
+            while (keys.hasNext()) {
+                JSONObject app = apps.optJSONObject(keys.next());
+                if (app != null && app.optBoolean("dock", false)) panels++;
+            }
+            Process p = new ProcessBuilder("su", "-c",
+                    "settings put global pico_systemext_coord_resfix_panels " + panels
+                            + "; settings put global pico_systemext_coord_resfix_generation $(date +%s)")
+                    .start();
+            p.waitFor();
+        } catch (Throwable ignored) {
         }
     }
 
