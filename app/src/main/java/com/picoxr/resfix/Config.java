@@ -266,6 +266,7 @@ public final class Config {
                 java.util.Iterator<String> keys = batchApps.keys();
                 while (keys.hasNext()) {
                     String pkg = keys.next();
+                    if ("com.picoxr.resfix".equals(pkg)) continue;
                     JSONObject entry = batchApps.optJSONObject(pkg);
                     if (entry == null) continue;
                     apps.put(pkg, entry);
@@ -288,7 +289,7 @@ public final class Config {
             JSONObject root = readRoot();
             JSONObject apps = ensureAppsObj(root);
             for (String pkg : packages) {
-                if (pkg == null || pkg.isEmpty()) continue;
+                if (pkg == null || pkg.isEmpty() || "com.picoxr.resfix".equals(pkg)) continue;
                 JSONObject entry = apps.optJSONObject(pkg);
                 if (entry == null) entry = new JSONObject();
                 entry.put("disabled", !enabled);
