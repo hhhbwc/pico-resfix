@@ -153,6 +153,7 @@ public class ResFix implements IXposedHookLoadPackage {
      * Decide target config. Returns null when this AppRecord should NOT be resized.
      */
     static Cfg decide(String pkg, Object appRecord) {
+        if ("com.picoxr.resfix".equals(pkg)) return null;
         boolean sys = !isNonSystemApp(appRecord);
         Cfg app = (pkg != null) ? appConfig(pkg) : null;
         if (app != null) return app;
@@ -180,6 +181,7 @@ public class ResFix implements IXposedHookLoadPackage {
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Object info = param.args[0];
                             String pkg = fieldString(info, "packageName");
+                            if ("com.picoxr.resfix".equals(pkg)) return;
                             Boolean dock = dockOverride(pkg);
                             if (dock == null) return;
                             param.setResult(dock ? 2002 : 3002);
@@ -200,6 +202,7 @@ public class ResFix implements IXposedHookLoadPackage {
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Object info = param.args[0];
                             String pkg = fieldString(info, "packageName");
+                            if ("com.picoxr.resfix".equals(pkg)) return;
                             Boolean dock = dockOverride(pkg);
                             if (dock != null) param.setResult(dock ? 2002 : 3002);
                         }
