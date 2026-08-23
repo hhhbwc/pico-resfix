@@ -109,6 +109,9 @@ public class AppDetailActivity extends AppCompatActivity {
         }
         tvTitle.setSelected(true);
         tvPkg.setSelected(true);
+        swEnable.setSelected(true);
+        swDock.setSelected(true);
+        findViewById(R.id.tv_density_label).setSelected(true);
 
         // Floating Resolution
         String[] itemsFloat = new String[resFloatArr.length + 1];

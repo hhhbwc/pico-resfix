@@ -62,7 +62,7 @@
                             android:layout_width="0dp"
                             android:layout_height="match_parent"
                             android:layout_marginRight="10dp"
-                            android:layout_weight="2"
+                            android:layout_weight="1.8"
                             app:cardBackgroundColor="@color/card_bg"
                             app:cardCornerRadius="16dp"
                             app:cardElevation="0dp"
@@ -151,7 +151,12 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:layout_gravity="center"
+                                android:ellipsize="marquee"
+                                android:focusable="true"
+                                android:focusableInTouchMode="true"
+                                android:marqueeRepeatLimit="marquee_forever"
                                 android:padding="16dp"
+                                android:singleLine="true"
                                 android:text="@string/enable_override"
                                 android:textAppearance="?attr/textAppearanceTitleMedium"
                                 app:trackTint="@color/switch_selector" />
@@ -172,7 +177,12 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:layout_gravity="center"
+                                android:ellipsize="marquee"
+                                android:focusable="true"
+                                android:focusableInTouchMode="true"
+                                android:marqueeRepeatLimit="marquee_forever"
                                 android:padding="16dp"
+                                android:singleLine="true"
                                 android:text="@string/enable_dock"
                                 android:textAppearance="?attr/textAppearanceTitleMedium"
                                 app:trackTint="@color/switch_selector" />
@@ -374,9 +384,15 @@
                                 android:padding="16dp">
 
                                 <TextView
-                                    android:layout_width="wrap_content"
+                                    android:id="@+id/tv_density_label"
+                                    android:layout_width="match_parent"
                                     android:layout_height="wrap_content"
                                     android:layout_marginBottom="12dp"
+                                    android:ellipsize="marquee"
+                                    android:focusable="true"
+                                    android:focusableInTouchMode="true"
+                                    android:marqueeRepeatLimit="marquee_forever"
+                                    android:singleLine="true"
                                     android:text="@string/density_label"
                                     android:textAppearance="?attr/textAppearanceTitleMedium" />
 
