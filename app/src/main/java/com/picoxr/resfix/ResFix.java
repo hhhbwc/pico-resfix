@@ -1,5 +1,7 @@
 package com.picoxr.resfix;
 
+import android.content.Context;
+import android.provider.Settings;
 import org.json.JSONObject;
 
 import java.io.File;
@@ -47,6 +49,23 @@ public class ResFix implements IXposedHookLoadPackage {
     }
 
     private static String readConfigText() {
+        // Try Settings.Global first (bypasses SELinux file restrictions)
+        try {
+            Object at = XposedHelpers.callStaticMethod(
+                    XposedHelpers.findClass("android.app.ActivityThread", null),
+                    "currentActivityThread");
+            if (at != null) {
+                Context ctx = (Context) XposedHelpers.callMethod(at, "getSystemContext");
+                if (ctx != null) {
+                    String s = Settings.Global.getString(ctx.getContentResolver(), "pico_systemext_coord_resfix_config");
+                    if (s != null && !s.isEmpty()) return s;
+                }
+            }
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": failed to read config from settings: " + t.getMessage());
+        }
+
+        // Fallback to file
         try {
             File f = new File(CONFIG);
             if (!f.exists()) return null;
@@ -55,7 +74,10 @@ public class ResFix implements IXposedHookLoadPackage {
             int n = in.read(data);
             in.close();
             return new String(data, 0, n, StandardCharsets.UTF_8);
-        } catch (Throwable t) { return null; }
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": failed to read config file: " + t.getMessage());
+            return null;
+        }
     }
 
     static Cfg defaultConfig() {
@@ -166,7 +188,8 @@ public class ResFix implements IXposedHookLoadPackage {
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lp) throws Throwable {
-        if (lp.packageName == null || !"com.picovr.systemext".equals(lp.packageName)) return;
+        if (!"com.picovr.systemext".equals(lp.packageName)) return;
+
         try {
             Class<?> activityInfo = XposedHelpers.findClass("android.content.pm.ActivityInfo", lp.classLoader);
             Class<?> appManagerUtils = XposedHelpers.findClass(
