@@ -137,55 +137,87 @@
 
                         <!-- Enable Switch -->
                         <com.google.android.material.card.MaterialCardView
+                            android:id="@+id/card_enable"
                             android:layout_width="0dp"
                             android:layout_height="match_parent"
                             android:layout_marginRight="10dp"
                             android:layout_weight="1"
+                            android:clickable="true"
+                            android:focusable="true"
                             app:cardBackgroundColor="@color/card_bg"
                             app:cardCornerRadius="16dp"
                             app:cardElevation="0dp"
                             app:strokeWidth="0dp">
 
-                            <com.google.android.material.materialswitch.MaterialSwitch
-                                android:id="@+id/sw_enable"
+                            <LinearLayout
                                 android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:layout_gravity="center"
-                                android:ellipsize="marquee"
-                                android:focusable="true"
-                                android:focusableInTouchMode="true"
-                                android:marqueeRepeatLimit="marquee_forever"
-                                android:padding="16dp"
-                                android:singleLine="true"
-                                android:text="@string/enable_override"
-                                android:textAppearance="?attr/textAppearanceTitleMedium"
-                                app:trackTint="@color/switch_selector" />
+                                android:layout_height="match_parent"
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal"
+                                android:padding="16dp">
+
+                                <TextView
+                                    android:id="@+id/tv_enable_label"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:ellipsize="marquee"
+                                    android:marqueeRepeatLimit="marquee_forever"
+                                    android:maxLines="2"
+                                    android:text="@string/enable_override"
+                                    android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+                                <com.google.android.material.materialswitch.MaterialSwitch
+                                    android:id="@+id/sw_enable"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="8dp"
+                                    android:clickable="false"
+                                    android:focusable="false"
+                                    app:trackTint="@color/switch_selector" />
+                            </LinearLayout>
                         </com.google.android.material.card.MaterialCardView>
 
                         <!-- Enable Dock -->
                         <com.google.android.material.card.MaterialCardView
+                            android:id="@+id/card_dock"
                             android:layout_width="0dp"
                             android:layout_height="match_parent"
                             android:layout_weight="1"
+                            android:clickable="true"
+                            android:focusable="true"
                             app:cardBackgroundColor="@color/card_bg"
                             app:cardCornerRadius="16dp"
                             app:cardElevation="0dp"
                             app:strokeWidth="0dp">
 
-                            <com.google.android.material.materialswitch.MaterialSwitch
-                                android:id="@+id/sw_dock"
+                            <LinearLayout
                                 android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:layout_gravity="center"
-                                android:ellipsize="marquee"
-                                android:focusable="true"
-                                android:focusableInTouchMode="true"
-                                android:marqueeRepeatLimit="marquee_forever"
-                                android:padding="16dp"
-                                android:singleLine="true"
-                                android:text="@string/enable_dock"
-                                android:textAppearance="?attr/textAppearanceTitleMedium"
-                                app:trackTint="@color/switch_selector" />
+                                android:layout_height="match_parent"
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal"
+                                android:padding="16dp">
+
+                                <TextView
+                                    android:id="@+id/tv_dock_label"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:ellipsize="marquee"
+                                    android:marqueeRepeatLimit="marquee_forever"
+                                    android:maxLines="2"
+                                    android:text="@string/enable_dock"
+                                    android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+                                <com.google.android.material.materialswitch.MaterialSwitch
+                                    android:id="@+id/sw_dock"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="8dp"
+                                    android:clickable="false"
+                                    android:focusable="false"
+                                    app:trackTint="@color/switch_selector" />
+                            </LinearLayout>
                         </com.google.android.material.card.MaterialCardView>
 
                     </LinearLayout>
