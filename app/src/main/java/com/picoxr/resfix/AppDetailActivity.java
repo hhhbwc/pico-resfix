@@ -23,6 +23,7 @@ import androidx.appcompat.app.AppCompatDelegate;
 import androidx.appcompat.widget.Toolbar;
 
 import com.google.android.material.button.MaterialButton;
+import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.textfield.TextInputEditText;
 
@@ -41,9 +42,10 @@ public class AppDetailActivity extends AppCompatActivity {
     public static final String EXTRA_BATCH_PACKAGES = "batch_packages";
     String pkg;
     ArrayList<String> batchPackages;
-    TextView tvTitle, tvPkg;
+    TextView tvTitle, tvPkg, tvEnableLabel, tvDockLabel, tvDensityLabel;
     ImageView ivIcon;
     MaterialSwitch swEnable, swDock;
+    MaterialCardView cardEnable, cardDock;
     Spinner spPreset, spPresetSwap;
     TextInputEditText etW, etH, etDensity;
     MaterialButton btnSave, btnSaveAndApply, btnRemove, btnSwapVal;
@@ -71,6 +73,10 @@ public class AppDetailActivity extends AppCompatActivity {
         ivIcon = findViewById(R.id.iv_icon);
         swEnable = findViewById(R.id.sw_enable);
         swDock = findViewById(R.id.sw_dock);
+        tvEnableLabel = findViewById(R.id.tv_enable_label);
+        tvDockLabel = findViewById(R.id.tv_dock_label);
+        cardEnable = findViewById(R.id.card_enable);
+        cardDock = findViewById(R.id.card_dock);
         spPreset = findViewById(R.id.sp_preset);
         spPresetSwap = findViewById(R.id.sp_preset_swap);
         etW = findViewById(R.id.et_w);
@@ -109,9 +115,10 @@ public class AppDetailActivity extends AppCompatActivity {
         }
         tvTitle.setSelected(true);
         tvPkg.setSelected(true);
-        swEnable.setSelected(true);
-        swDock.setSelected(true);
-        findViewById(R.id.tv_density_label).setSelected(true);
+        setupAutoMarquee(tvEnableLabel);
+        setupAutoMarquee(tvDockLabel);
+        tvDensityLabel = findViewById(R.id.tv_density_label);
+        setupAutoMarquee(tvDensityLabel);
 
         // Floating Resolution
         String[] itemsFloat = new String[resFloatArr.length + 1];
@@ -151,8 +158,12 @@ public class AppDetailActivity extends AppCompatActivity {
 
         loadCurrent();
         if (TextUtils.isEmpty(pkg) && !isBatch) {
-            swDock.setVisibility(View.GONE);
+            cardDock.setVisibility(View.GONE);
         }
+        
+        cardEnable.setOnClickListener(v -> swEnable.toggle());
+        cardDock.setOnClickListener(v -> swDock.toggle());
+
         swEnable.setOnCheckedChangeListener((x, checked) -> {
             spPreset.setEnabled(checked);
             spPresetSwap.setEnabled(checked);
@@ -486,5 +497,16 @@ public class AppDetailActivity extends AppCompatActivity {
     }
     static int parseIntStr(String s) {
         try { return Integer.parseInt(s); } catch (Throwable t) { return 0; }
+    }
+
+    private void setupAutoMarquee(TextView tv) {
+        tv.setSelected(true);
+        tv.post(() -> {
+            if (tv.getLayout() != null && tv.getLayout().getLineCount() > 2) {
+                tv.setSingleLine(true);
+                tv.setEllipsize(android.text.TextUtils.TruncateAt.MARQUEE);
+                tv.setSelected(true);
+            }
+        });
     }
 }
