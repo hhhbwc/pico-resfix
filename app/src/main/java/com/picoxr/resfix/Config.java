@@ -44,12 +44,28 @@ public final class Config {
     public static String readRaw() {
         try {
             File f = new File(PATH);
-            if (!f.exists()) return null;
-            FileInputStream in = new FileInputStream(f);
-            byte[] d = new byte[(int) f.length()];
-            int n = in.read(d); in.close();
-            return new String(d, 0, n, StandardCharsets.UTF_8);
-        } catch (Throwable t) { return null; }
+            if (f.exists() && f.canRead()) {
+                FileInputStream in = new FileInputStream(f);
+                byte[] d = new byte[(int) f.length()];
+                int n = in.read(d);
+                in.close();
+                return new String(d, 0, n, StandardCharsets.UTF_8);
+            }
+        } catch (Throwable ignored) {}
+
+        try {
+            Process p = new ProcessBuilder("su", "-c", "cat '" + PATH + "'").start();
+            java.io.InputStream is = p.getInputStream();
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int l;
+            while ((l = is.read(buf)) != -1) bos.write(buf, 0, l);
+            is.close();
+            if (p.waitFor() == 0) {
+                return new String(bos.toByteArray(), StandardCharsets.UTF_8);
+            }
+        } catch (Throwable ignored) {}
+        return null;
     }
 
     public static JSONObject readRoot() {
@@ -212,7 +228,7 @@ public final class Config {
             new JSONObject(json);
             String tmp = PATH + ".tmp." + android.os.Process.myPid();
             Process p = new ProcessBuilder("su", "-c",
-                    "umask 022; cat > '" + tmp + "' && chmod 644 '" + tmp
+                    "umask 000; cat > '" + tmp + "' && chmod 666 '" + tmp
                             + "' && mv -f '" + tmp + "' '" + PATH + "'")
                     .redirectErrorStream(false).start();
             java.io.OutputStream os = p.getOutputStream();
@@ -220,6 +236,11 @@ public final class Config {
             os.flush();
             os.close();
             if (p.waitFor() != 0) return false;
+            
+            // Sync to Settings.Global to bypass SELinux file restrictions for the hook
+            String escaped = json.replace("'", "'\\''");
+            new ProcessBuilder("su", "-c", "settings put global pico_systemext_coord_resfix_config '" + escaped + "'").start().waitFor();
+
             String persisted = readRaw();
             if (persisted == null || !json.equals(persisted)) return false;
             publishCoordination(root);
