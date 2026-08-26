@@ -262,9 +262,17 @@ public class AppDetailActivity extends AppCompatActivity {
             }
         } else {
             if (target != null) {
-                etW.setText(String.valueOf(target.optInt("w", isDock ? glob.dockWidth : glob.floatingWidth)));
-                etH.setText(String.valueOf(target.optInt("h", isDock ? glob.dockHeight : glob.floatingHeight)));
-                etDensity.setText(String.valueOf(target.optInt("density", isDock ? glob.dockDensity : glob.floatingDensity)));
+                String widthKey = isDock ? "near_w" : "w";
+                String heightKey = isDock ? "near_h" : "h";
+                String densityKey = isDock ? "near_density" : "density";
+                if (isDock && (!target.has(widthKey) || !target.has(heightKey))) {
+                    widthKey = "w";
+                    heightKey = "h";
+                    densityKey = "density";
+                }
+                etW.setText(String.valueOf(target.optInt(widthKey, isDock ? glob.dockWidth : glob.floatingWidth)));
+                etH.setText(String.valueOf(target.optInt(heightKey, isDock ? glob.dockHeight : glob.floatingHeight)));
+                etDensity.setText(String.valueOf(target.optInt(densityKey, isDock ? glob.dockDensity : glob.floatingDensity)));
             } else {
                 etW.setText(String.valueOf(isDock ? glob.dockWidth : glob.floatingWidth));
                 etH.setText(String.valueOf(isDock ? glob.dockHeight : glob.floatingHeight));
@@ -318,10 +326,11 @@ public class AppDetailActivity extends AppCompatActivity {
                 root.put("apps", apps);
                 target.put("disabled", !swEnable.isChecked());
                 target.put("dock", swDock.isChecked());
-                target.put("w", w); target.put("h", h);
+                String pfx = swDock.isChecked() ? "near_" : "";
+                target.put(pfx + "w", w); target.put(pfx + "h", h);
                 String d = etDensity.getText() != null ? etDensity.getText().toString().trim() : "";
-                if (!TextUtils.isEmpty(d)) target.put("density", parseIntStr(d));
-                else target.remove("density");
+                if (!TextUtils.isEmpty(d)) target.put(pfx + "density", parseIntStr(d));
+                else target.remove(pfx + "density");
             }
             boolean ok = Config.writeRoot(root);
             Toast.makeText(this, ok ? getString(R.string.saved_toast) : getString(R.string.write_failed), Toast.LENGTH_LONG).show();

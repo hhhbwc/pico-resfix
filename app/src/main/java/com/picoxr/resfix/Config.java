@@ -159,10 +159,19 @@ public final class Config {
                         // Dock routing remains active even when resolution overriding is disabled.
                         // Treat that as a configured entry so filters cannot hide it.
                         hasOverride = resolutionEnabled || a.has("dock");
-                        overW = a.optInt("w", 0);
-                        overH = a.optInt("h", 0);
-                        overD = a.has("density") ? a.getInt("density") : -1;
                         if (a.has("dock")) overDock = a.optBoolean("dock", false);
+                        String widthKey = overDock ? "near_w" : "w";
+                        String heightKey = overDock ? "near_h" : "h";
+                        String densityKey = overDock ? "near_density" : "density";
+                        // Legacy app entries used w/h for both modes.
+                        if (overDock && (!a.has(widthKey) || !a.has(heightKey))) {
+                            widthKey = "w";
+                            heightKey = "h";
+                            densityKey = "density";
+                        }
+                        overW = a.optInt(widthKey, 0);
+                        overH = a.optInt(heightKey, 0);
+                        overD = a.has(densityKey) ? a.optInt(densityKey, -1) : -1;
                         if (!resolutionEnabled) {
                             overW = 0;
                             overH = 0;
@@ -335,10 +344,11 @@ public final class Config {
                 if (entry == null) entry = new JSONObject();
                 entry.put("disabled", !enabled);
                 entry.put("dock", dock);
-                entry.put("w", w);
-                entry.put("h", h);
-                if (density > 0) entry.put("density", density);
-                else entry.remove("density");
+                String prefix = dock ? "near_" : "";
+                entry.put(prefix + "w", w);
+                entry.put(prefix + "h", h);
+                if (density > 0) entry.put(prefix + "density", density);
+                else entry.remove(prefix + "density");
                 apps.put(pkg, entry);
             }
             root.put("apps", apps);

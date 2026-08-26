@@ -123,13 +123,16 @@ public class ResFix implements IXposedHookLoadPackage {
         }
     }
 
-    static Cfg defaultConfig() {
+    static Cfg defaultConfig(boolean dock) {
         JSONObject value = configSnapshot().root.optJSONObject("default");
         if (value == null) return new Cfg(0, 0, -1, true, false);
         try {
-            int width = value.has("w") ? value.getInt("w") : 0;
-            int height = value.has("h") ? value.getInt("h") : 0;
-            int density = value.has("density") ? value.getInt("density") : -1;
+            String widthKey = dock ? "near_w" : "w";
+            String heightKey = dock ? "near_h" : "h";
+            String densityKey = dock ? "near_density" : "density";
+            int width = value.has(widthKey) ? value.getInt(widthKey) : 0;
+            int height = value.has(heightKey) ? value.getInt(heightKey) : 0;
+            int density = value.has(densityKey) ? value.getInt(densityKey) : -1;
             return new Cfg(width, height, density, value.optBoolean("applyThird", true),
                     value.optBoolean("applySystem", false));
         } catch (Throwable t) {
@@ -138,15 +141,24 @@ public class ResFix implements IXposedHookLoadPackage {
         }
     }
 
-    static Cfg appConfig(String pkg) {
+    static Cfg appConfig(String pkg, boolean dock) {
         if (pkg == null) return null;
         JSONObject apps = configSnapshot().root.optJSONObject("apps");
         JSONObject value = apps == null ? null : apps.optJSONObject(pkg);
         if (value == null || value.optBoolean("disabled", false)) return null;
         try {
-            int width = value.getInt("w");
-            int height = value.getInt("h");
-            int density = value.has("density") ? value.getInt("density") : -1;
+            String widthKey = dock ? "near_w" : "w";
+            String heightKey = dock ? "near_h" : "h";
+            String densityKey = dock ? "near_density" : "density";
+            // Older entries only had w/h; keep them working for Dock until explicitly split.
+            if (dock && (!value.has(widthKey) || !value.has(heightKey))) {
+                widthKey = "w";
+                heightKey = "h";
+                densityKey = "density";
+            }
+            int width = value.getInt(widthKey);
+            int height = value.getInt(heightKey);
+            int density = value.has(densityKey) ? value.getInt(densityKey) : -1;
             return ConfigSchema.isResolutionValid(width, height)
                     && (density < 0 || ConfigSchema.isDensityValid(density))
                     ? new Cfg(width, height, density, true, false) : null;
@@ -202,9 +214,10 @@ public class ResFix implements IXposedHookLoadPackage {
     /** Returns null when this AppRecord should not be resized. */
     static Cfg decide(String pkg, Object appRecord) {
         if ("com.picoxr.resfix".equals(pkg)) return null;
-        Cfg app = appConfig(pkg);
+        Boolean dock = dockOverride(pkg);
+        Cfg app = appConfig(pkg, Boolean.TRUE.equals(dock));
         if (app != null) return app;
-        Cfg global = defaultConfig();
+        Cfg global = defaultConfig(Boolean.TRUE.equals(dock));
         if (!ConfigSchema.isResolutionValid(global.w, global.h)) return null;
         Boolean system = isSystemApp(appRecord);
         if (system == null) return null;
