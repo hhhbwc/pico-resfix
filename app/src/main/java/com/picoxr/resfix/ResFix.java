@@ -40,11 +40,11 @@ public class ResFix implements IXposedHookLoadPackage {
     }
 
     private static final class Snapshot {
-        final String generation;
+        final String key;
         final JSONObject root;
 
-        Snapshot(String generation, JSONObject root) {
-            this.generation = generation;
+        Snapshot(String key, JSONObject root) {
+            this.key = key;
             this.root = root;
         }
     }
@@ -65,7 +65,7 @@ public class ResFix implements IXposedHookLoadPackage {
 
     private static Snapshot configSnapshot() {
         Context context = systemContext();
-        String generation = "";
+        String generation = null;
         String settingsConfig = null;
         if (context != null) {
             try {
@@ -75,20 +75,28 @@ public class ResFix implements IXposedHookLoadPackage {
                 log("failed to read configuration settings", t);
             }
         }
-        if (generation == null) generation = "";
-        Snapshot current = snapshot;
-        if (current != null && current.generation.equals(generation)) return current;
 
-        JSONObject parsed = parseConfig(settingsConfig, "Settings.Global");
-        if (parsed == null) parsed = parseConfig(readFileConfig(), CONFIG);
+        String fileConfig = readFileConfig();
+        JSONObject parsed = parseConfig(fileConfig, CONFIG);
+        String source = CONFIG;
         if (parsed == null) {
+            parsed = parseConfig(settingsConfig, "Settings.Global");
+            source = "Settings.Global";
+        }
+        if (parsed == null) {
+            Snapshot current = snapshot;
             if (current != null) {
                 log("configuration reload failed; keeping last valid snapshot", null);
                 return current;
             }
             parsed = new JSONObject();
         }
-        Snapshot loaded = new Snapshot(generation, parsed);
+
+        String content = source + ":" + (source.equals(CONFIG) ? fileConfig : settingsConfig);
+        String key = (generation == null ? "" : generation) + ":" + content.hashCode();
+        Snapshot current = snapshot;
+        if (current != null && current.key.equals(key)) return current;
+        Snapshot loaded = new Snapshot(key, parsed);
         snapshot = loaded;
         return loaded;
     }
@@ -275,36 +283,75 @@ public class ResFix implements IXposedHookLoadPackage {
                     "com.bytedance.nativeshell.appmanager.AppContainer", lp.classLoader);
             XC_MethodHook windowTypeHook = new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
-                    String pkg = fieldString(param.args[0], "packageName");
-                    Boolean dock = dockOverride(pkg);
-                    if (dock != null && !"com.picoxr.resfix".equals(pkg)) param.setResult(dock ? 2002 : 3002);
-                }
-            };
-            XposedHelpers.findAndHookMethod(appManagerUtils, "getWindowType", activityInfo, windowTypeHook);
-            XposedHelpers.findAndHookMethod(appRecord, "getWindowType", activityInfo, windowTypeHook);
-            XposedHelpers.findAndHookMethod(appRecord, "prepareAppData", "android.content.Context", new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam param) {
-                    Boolean dock = dockOverride(pkgFromThis(param.thisObject));
-                    if (dock != null) XposedHelpers.setObjectField(param.thisObject, "mAppResizeable", dock);
-                }
-            });
-            XposedHelpers.findAndHookMethod(appRecord, "resizeable", new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam param) {
-                    Boolean dock = dockOverride(pkgFromThis(param.thisObject));
-                    if (dock != null) param.setResult(dock);
-                }
-            });
-            XposedHelpers.findAndHookMethod(appContainer, "updateVisible", boolean.class, int.class, new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam param) {
-                    if (!(Boolean) param.args[0] && (Integer) param.args[1] == 6
-                            && Boolean.TRUE.equals(dockOverride(pkgFromThis(param.thisObject)))) {
-                        param.setResult(false);
+                    try {
+                        String pkg = fieldString(param.args[0], "packageName");
+                        Boolean dock = dockOverride(pkg);
+                        if (dock != null && !"com.picoxr.resfix".equals(pkg)) {
+                            param.setResult(dock ? 2002 : 3002);
+                            XposedBridge.log(TAG + ": route " + pkg + " -> " + (dock ? 2002 : 3002));
+                        }
+                    } catch (Throwable t) {
+                        log("window type callback failed", t);
                     }
                 }
-            });
-            XposedBridge.log(TAG + ": installed dock hooks");
+            };
+            hook("AppManagerUtils.getWindowType", () -> XposedHelpers.findAndHookMethod(
+                    appManagerUtils, "getWindowType", activityInfo, windowTypeHook));
+            hook("AppRecord.getWindowType", () -> XposedHelpers.findAndHookMethod(
+                    appRecord, "getWindowType", activityInfo, windowTypeHook));
+            hook("AppRecord.prepareAppData", () -> XposedHelpers.findAndHookMethod(
+                    appRecord, "prepareAppData", "android.content.Context", new XC_MethodHook() {
+                        @Override protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                Boolean dock = dockOverride(pkgFromThis(param.thisObject));
+                                if (dock != null) XposedHelpers.setObjectField(
+                                        param.thisObject, "mAppResizeable", dock);
+                            } catch (Throwable t) {
+                                log("prepareAppData callback failed", t);
+                            }
+                        }
+                    }));
+            hook("AppRecord.resizeable", () -> XposedHelpers.findAndHookMethod(
+                    appRecord, "resizeable", new XC_MethodHook() {
+                        @Override protected void beforeHookedMethod(MethodHookParam param) {
+                            try {
+                                Boolean dock = dockOverride(pkgFromThis(param.thisObject));
+                                if (dock != null) param.setResult(dock);
+                            } catch (Throwable t) {
+                                log("resizeable callback failed", t);
+                            }
+                        }
+                    }));
+            hook("AppContainer.updateVisible", () -> XposedHelpers.findAndHookMethod(
+                    appContainer, "updateVisible", boolean.class, int.class, new XC_MethodHook() {
+                        @Override protected void beforeHookedMethod(MethodHookParam param) {
+                            try {
+                                if (param.args.length >= 2 && param.args[0] instanceof Boolean
+                                        && param.args[1] instanceof Integer
+                                        && !(Boolean) param.args[0] && (Integer) param.args[1] == 6
+                                        && Boolean.TRUE.equals(dockOverride(pkgFromThis(param.thisObject)))) {
+                                    param.setResult(false);
+                                }
+                            } catch (Throwable t) {
+                                log("updateVisible callback failed", t);
+                            }
+                        }
+                    }));
         } catch (Throwable t) {
-            log("failed to install dock hooks", t);
+            log("failed to resolve dock hook classes", t);
+        }
+    }
+
+    private interface HookInstall {
+        void install() throws Throwable;
+    }
+
+    private static void hook(String name, HookInstall install) {
+        try {
+            install.install();
+            XposedBridge.log(TAG + ": installed " + name);
+        } catch (Throwable t) {
+            log("failed to install " + name, t);
         }
     }
 

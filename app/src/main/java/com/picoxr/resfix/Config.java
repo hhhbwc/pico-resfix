@@ -3,6 +3,7 @@ package com.picoxr.resfix;
 import org.json.JSONObject;
 
 import android.content.Context;
+import android.util.Log;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
@@ -261,9 +262,14 @@ public final class Config {
             String escaped = json.replace("'", "'\\''");
             Process settings = new ProcessBuilder("su", "-c",
                     "settings put global pico_systemext_coord_resfix_config '" + escaped + "'").start();
-            settings.waitFor(15, java.util.concurrent.TimeUnit.SECONDS);
-
+            boolean settingsWritten = settings.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
+                    && settings.exitValue() == 0;
             String persisted = readRaw();
+            if (!settingsWritten) {
+                // The file is authoritative; Settings.Global is only a restricted-device fallback.
+                // Do not report a successful file write as failed when this mirror is unavailable.
+                Log.w("PicoResFix", "Settings.Global mirror unavailable");
+            }
             if (persisted == null || !json.equals(persisted)) return false;
             publishCoordination(root);
             return true;

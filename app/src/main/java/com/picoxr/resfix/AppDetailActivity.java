@@ -52,7 +52,7 @@ public class AppDetailActivity extends AppCompatActivity {
     Spinner spPreset, spPresetSwap;
     TextInputEditText etW, etH, etDensity;
     MaterialButton btnSave, btnSaveAndApply, btnRemove, btnSwapVal;
-    private final ExecutorService restartExecutor = Executors.newSingleThreadExecutor();
+    private static final ExecutorService restartExecutor = Executors.newSingleThreadExecutor();
 
     final String[] resFloatArr = {"1280 × 722","1600 × 902","1920 × 1082","2560 × 1442","3840 × 2162"};
     final String[] resDockArr = {"807 × 432","1127 × 752","1447 × 1072","1767 × 1392","2087 × 1712"};
@@ -450,24 +450,19 @@ public class AppDetailActivity extends AppCompatActivity {
         for (String packageName : packages) {
             if (TextUtils.isEmpty(packageName)) continue;
             try {
-                if (!isAppRunning(packageName)) continue;
                 Process stop = new ProcessBuilder("su", "-c", "am force-stop " + packageName).start();
                 if (stop.waitFor(15, TimeUnit.SECONDS) && stop.exitValue() == 0) {
-                    runOnUiThread(() -> launchPackage(packageName));
+                    launchPackage(packageName);
+                } else {
+                    stop.destroyForcibly();
                 }
             } catch (Throwable ignored) {
                 // Saving the configuration must still succeed when an app cannot be relaunched.
             }
         }
         if (!TextUtils.isEmpty(foregroundPackage) && !packages.contains(foregroundPackage)) {
-            runOnUiThread(() -> launchPackage(foregroundPackage));
+            launchPackage(foregroundPackage);
         }
-    }
-
-    @Override
-    protected void onDestroy() {
-        restartExecutor.shutdownNow();
-        super.onDestroy();
     }
 
     private boolean isAppRunning(String packageName) {
@@ -478,8 +473,9 @@ public class AppDetailActivity extends AppCompatActivity {
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             String output = reader.readLine();
             reader.close();
-            return process.waitFor(15, TimeUnit.SECONDS) && process.exitValue() == 0
-                    && !TextUtils.isEmpty(output);
+            boolean finished = process.waitFor(15, TimeUnit.SECONDS);
+            if (!finished) process.destroyForcibly();
+            return finished && process.exitValue() == 0 && !TextUtils.isEmpty(output);
         } catch (Throwable ignored) {
             return false;
         }
@@ -503,7 +499,7 @@ public class AppDetailActivity extends AppCompatActivity {
                 return brace >= 0 ? component.substring(brace + 1) : component;
             }
             reader.close();
-            process.waitFor(15, TimeUnit.SECONDS);
+            if (!process.waitFor(15, TimeUnit.SECONDS)) process.destroyForcibly();
         } catch (Throwable ignored) {
         }
         return null;
@@ -514,7 +510,8 @@ public class AppDetailActivity extends AppCompatActivity {
             Intent launchIntent = getPackageManager().getLaunchIntentForPackage(packageName);
             if (launchIntent != null) {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(launchIntent);
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                getApplicationContext().startActivity(launchIntent);
             }
         } catch (Throwable ignored) {
         }
