@@ -7,7 +7,7 @@
 
 用 **Zygisk Vector (LSPosed 兼容框架)** 注入 `com.picovr.systemext` 实现 —— 无需替换系统 APK。
 
-**当前版本：v1.3**
+**当前版本：v1.16**
 
 ---
 
@@ -51,7 +51,7 @@ PICO 4 (Android 10, API 29)
 
 配置通道: /data/local/tmp/resfix.cfg (JSON)
   - GUI App (root) 写入
-  - ResFix hook 每次 createVirtualDisplay 实时读取
+  - ResFix hook 通过校验后的版本化配置快照读取
 ```
 
 ---
@@ -77,7 +77,9 @@ PICO 4 (Android 10, API 29)
 - `default`: 未单独配置的非系统应用（applyThird=true 时）统一用此分辨率。
 - `apps.<pkg>`: 某应用的单独覆盖（禁用用 `"disabled": true`）。
 - `apps.<pkg>.dock`: `true` 时将应用路由至原生近场 Dock（类型 2002）；`false` 时强制为普通远场浮窗（类型 3002），包括已被 Pico2Dock 转换过的应用。该设置独立于分辨率覆盖，关闭“启用覆盖”不会关闭 Dock。
-- `density` 省略 = 跟随系统；`-1`/不存在 = 不改 density。
+- `density` 省略 = 跟随系统；不要在 JSON 中写入 `-1`。
+- 宽度范围为 320–7680 px，高度范围为 240–4320 px，Density 范围为 72–1000。字段缺失、类型错误或超出范围的配置会在写入前被拒绝，不会传给 SystemExt。
+- 配置最多包含 500 个应用条目，文件最大为 256 KiB。若 `Settings.Global` 内容无效，Hook 会回退读取配置文件；两个来源都无效时保留最后一份有效配置。
 
 修改单个应用后，可用 **应用并重启 App** 保存并重启当前目标应用；普通 **保存** 只写入配置，不重启应用。全局默认配置没有单一目标应用，仍需手动重开受影响的应用。
 
@@ -85,10 +87,10 @@ PICO 4 (Android 10, API 29)
 
 ## 五、构建
 
-需要: JDK 17 + Android SDK (platform 34, build-tools 34) + Gradle 8.7
+需要: JDK 17 + Android SDK (platform 34, build-tools 34)。使用项目内置的 Gradle Wrapper，它会选择本项目的 Gradle 版本。
 
 ```bash
-gradle :app:assembleDebug
+./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
 ```
 
 ---
@@ -105,4 +107,4 @@ gradle :app:assembleDebug
 
 ## 七、版本命名
 
-Android 的 `versionName`、Git tag、GitHub Release 标题和 Release APK 文件名统一使用同一版本号。例如 v1.3 对应 tag `1.3` 和 `Pico-ResFix-v1.3.apk`。
+Android 的 `versionName`、Git tag、GitHub Release 标题和 Release APK 文件名统一使用同一版本号。例如 v1.16 对应 tag `1.16` 和 `Pico-ResFix-v1.16.apk`。
