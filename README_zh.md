@@ -75,8 +75,8 @@ PICO 4 (Android 10, API 29)
 ```
 
 - `default`: 未单独配置的非系统应用（applyThird=true 时）统一用此分辨率。
-- `apps.<pkg>`: 某应用的单独覆盖（禁用用 `"disabled": true`）。
-- `apps.<pkg>.dock`: `true` 时将应用路由至原生近场 Dock（类型 2002）；`false` 时强制为普通远场浮窗（类型 3002），包括已被 Pico2Dock 转换过的应用。该设置独立于分辨率覆盖，关闭“启用覆盖”不会关闭 Dock。
+- `apps.<pkg>`: 某应用的单独覆盖（禁用用 `"disabled": true`）。`w/h/density` 配置远场浮窗，`near_w/near_h/near_density` 配置近场 Dock；两套配置会同时保留，修改一种模式不会清除另一种模式。
+- `apps.<pkg>.dock`: `true` 时将应用路由至原生近场 Dock（类型 2002）；`false` 时强制为普通远场浮窗（类型 3002），包括已被 Pico2Dock 转换过的应用。运行时会根据当前模式选择对应的分辨率配置。
 - `density` 省略 = 跟随系统；不要在 JSON 中写入 `-1`。
 - 宽度范围为 320–7680 px，高度范围为 240–4320 px，Density 范围为 72–1000。字段缺失、类型错误或超出范围的配置会在写入前被拒绝，不会传给 SystemExt。
 - 配置最多包含 500 个应用条目，文件最大为 256 KiB。若 `Settings.Global` 内容无效，Hook 会回退读取配置文件；两个来源都无效时保留最后一份有效配置。

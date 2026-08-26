@@ -36,6 +36,19 @@ public class ConfigSchemaTest {
     }
 
     @Test
+    public void acceptsIndependentFloatingAndDockResolution() throws Exception {
+        ConfigSchema.parse("{\"apps\":{\"com.example.app\":{"
+                + "\"w\":1920,\"h\":1080,\"density\":200,"
+                + "\"near_w\":1127,\"near_h\":752,\"near_density\":240,\"dock\":true}}}");
+    }
+
+    @Test
+    public void acceptsLegacySingleResolutionEntry() throws Exception {
+        ConfigSchema.parse("{\"apps\":{\"com.example.app\":{"
+                + "\"w\":1920,\"h\":1080,\"dock\":true}}}");
+    }
+
+    @Test
     public void validatesKnownBoundaries() {
         assertTrue(ConfigSchema.isResolutionValid(ConfigSchema.MIN_WIDTH, ConfigSchema.MIN_HEIGHT));
         assertTrue(ConfigSchema.isResolutionValid(ConfigSchema.MAX_WIDTH, ConfigSchema.MAX_HEIGHT));

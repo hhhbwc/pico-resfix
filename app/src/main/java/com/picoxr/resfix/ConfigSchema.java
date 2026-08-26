@@ -67,6 +67,7 @@ public final class ConfigSchema {
 
     private static void validateApp(JSONObject value) throws JSONException {
         validateResolution(value, "w", "h", "density");
+        validateResolution(value, "near_w", "near_h", "near_density");
         validateBoolean(value, "disabled");
         validateBoolean(value, "dock");
     }

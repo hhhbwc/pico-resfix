@@ -75,8 +75,8 @@ Config path: /data/local/tmp/resfix.cfg (JSON)
 ```
 
 - `default`: Uniform resolution for non-configured non-system apps (when applyThird=true).
-- `apps.<pkg>`: Individual override for an app (use `"disabled": true` to disable).
-- `apps.<pkg>.dock`: `true` routes the app to the native Near-field Dock (type 2002); `false` forces the normal far floating window (type 3002), including apps previously converted by Pico2Dock. This setting is independent of resolution override.
+- `apps.<pkg>`: Individual override for an app (use `"disabled": true` to disable). `w/h/density` configure Floating mode; `near_w/near_h/near_density` configure Dock mode. Both sets are retained, so changing one mode does not erase the other.
+- `apps.<pkg>.dock`: `true` routes the app to the native Near-field Dock (type 2002); `false` forces the normal far floating window (type 3002), including apps previously converted by Pico2Dock. The active mode selects its own resolution set.
 - `density` omitted = Follow system; do not write `-1` as a JSON value.
 - Width must be 320–7680 px, height 240–4320 px, and density 72–1000. Invalid, incomplete, or wrongly typed entries are rejected before they reach SystemExt.
 - A configuration may contain at most 500 app entries and must not exceed 256 KiB. If `Settings.Global` has invalid content, the hook falls back to the config file; if both sources fail, it keeps the last valid configuration.
