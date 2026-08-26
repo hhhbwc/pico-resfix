@@ -7,7 +7,7 @@ Allows **per-app configuration** of 2D virtual display resolution (no longer loc
 
 Implemented by injecting into `com.picovr.systemext` using **Zygisk Vector (LSPosed compatible framework)** — no system APK replacement required.
 
-**Current release: v1.3**
+**Current release: v1.16**
 
 ---
 
@@ -51,7 +51,7 @@ PICO 4 (Android 10, API 29)
 
 Config path: /data/local/tmp/resfix.cfg (JSON)
   - Written by GUI App (root)
-  - Read in real-time by ResFix hook during each createVirtualDisplay
+  - Read by ResFix through a validated, versioned configuration snapshot
 ```
 
 ---
@@ -77,7 +77,9 @@ Config path: /data/local/tmp/resfix.cfg (JSON)
 - `default`: Uniform resolution for non-configured non-system apps (when applyThird=true).
 - `apps.<pkg>`: Individual override for an app (use `"disabled": true` to disable).
 - `apps.<pkg>.dock`: `true` routes the app to the native Near-field Dock (type 2002); `false` forces the normal far floating window (type 3002), including apps previously converted by Pico2Dock. This setting is independent of resolution override.
-- `density` omitted = Follow system; `-1`/non-existent = Do not change density.
+- `density` omitted = Follow system; do not write `-1` as a JSON value.
+- Width must be 320–7680 px, height 240–4320 px, and density 72–1000. Invalid, incomplete, or wrongly typed entries are rejected before they reach SystemExt.
+- A configuration may contain at most 500 app entries and must not exceed 256 KiB. If `Settings.Global` has invalid content, the hook falls back to the config file; if both sources fail, it keeps the last valid configuration.
 
 After changing a per-app setting, use **Apply & Restart App** to save it and restart the selected target app. The plain **Save** button writes the configuration without restarting it. Default settings have no single target app, so they still require restarting affected apps manually.
 
@@ -85,10 +87,10 @@ After changing a per-app setting, use **Apply & Restart App** to save it and res
 
 ## 5. Build (CLI only)
 
-Requirements: JDK 17 + Android SDK (platform 34, build-tools 34) + Gradle 8.7
+Requirements: JDK 17 + Android SDK (platform 34, build-tools 34). Use the checked-in Gradle Wrapper; it selects the project Gradle version.
 
 ```bash
-gradle :app:assembleDebug
+./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
 ```
 
 ---
@@ -128,4 +130,4 @@ gradle :app:assembleDebug
 
 ## 7. Versioning
 
-Android `versionName`, Git tag, GitHub Release title, and release APK filename use the same version number. For example, v1.3 is published as tag `1.3` with `Pico-ResFix-v1.3.apk`.
+Android `versionName`, Git tag, GitHub Release title, and release APK filename use the same version number. For example, v1.16 is published as tag `1.16` with `Pico-ResFix-v1.16.apk`.

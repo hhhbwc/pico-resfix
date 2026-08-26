@@ -45,4 +45,6 @@ dependencies {
     // Vector's legacy bridge exposes the older API signature where hook helpers
     // return XC_MethodHook.Unhook. Keep this compile-only so it is never bundled.
     compileOnly files('libs/vector-legacy-xposed-api.jar')
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
 }

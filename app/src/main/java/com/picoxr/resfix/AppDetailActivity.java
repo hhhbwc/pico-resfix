@@ -32,6 +32,9 @@ import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Per-app (or default) resolution editor. If pkg == "" it edits the global default
@@ -49,6 +52,7 @@ public class AppDetailActivity extends AppCompatActivity {
     Spinner spPreset, spPresetSwap;
     TextInputEditText etW, etH, etDensity;
     MaterialButton btnSave, btnSaveAndApply, btnRemove, btnSwapVal;
+    private final ExecutorService restartExecutor = Executors.newSingleThreadExecutor();
 
     final String[] resFloatArr = {"1280 × 722","1600 × 902","1920 × 1082","2560 × 1442","3840 × 2162"};
     final String[] resDockArr = {"807 × 432","1127 × 752","1447 × 1072","1767 × 1392","2087 × 1712"};
@@ -293,7 +297,7 @@ public class AppDetailActivity extends AppCompatActivity {
                 Toast.makeText(this, ok ? getString(R.string.batch_updated, batchPackages.size())
                         : getString(R.string.write_failed), Toast.LENGTH_LONG).show();
                 if (ok) {
-                    if (applyAfterSaving) restartApps(batchPackages);
+                    if (applyAfterSaving) restartAppsAsync(batchPackages);
                     finish();
                 }
                 return;
@@ -322,7 +326,9 @@ public class AppDetailActivity extends AppCompatActivity {
             boolean ok = Config.writeRoot(root);
             Toast.makeText(this, ok ? getString(R.string.saved_toast) : getString(R.string.write_failed), Toast.LENGTH_LONG).show();
             if (ok) {
-                if (applyAfterSaving && !TextUtils.isEmpty(pkg)) restartApps(java.util.Collections.singletonList(pkg));
+                if (applyAfterSaving && !TextUtils.isEmpty(pkg)) {
+                    restartAppsAsync(java.util.Collections.singletonList(pkg));
+                }
                 finish();
             }
         } catch (Throwable t) {
@@ -425,21 +431,34 @@ public class AppDetailActivity extends AppCompatActivity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
+    private void restartAppsAsync(java.util.List<String> packages) {
+        ArrayList<String> targets = new ArrayList<>(packages);
+        restartExecutor.execute(() -> restartApps(targets));
+    }
+
     private void restartApps(java.util.List<String> packages) {
         String foregroundPackage = getForegroundPackage();
         for (String packageName : packages) {
             if (TextUtils.isEmpty(packageName)) continue;
             try {
                 if (!isAppRunning(packageName)) continue;
-                new ProcessBuilder("su", "-c", "am force-stop " + packageName).start().waitFor();
-                launchPackage(packageName);
+                Process stop = new ProcessBuilder("su", "-c", "am force-stop " + packageName).start();
+                if (stop.waitFor(15, TimeUnit.SECONDS) && stop.exitValue() == 0) {
+                    runOnUiThread(() -> launchPackage(packageName));
+                }
             } catch (Throwable ignored) {
                 // Saving the configuration must still succeed when an app cannot be relaunched.
             }
         }
         if (!TextUtils.isEmpty(foregroundPackage) && !packages.contains(foregroundPackage)) {
-            launchPackage(foregroundPackage);
+            runOnUiThread(() -> launchPackage(foregroundPackage));
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        restartExecutor.shutdownNow();
+        super.onDestroy();
     }
 
     private boolean isAppRunning(String packageName) {
@@ -450,7 +469,8 @@ public class AppDetailActivity extends AppCompatActivity {
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             String output = reader.readLine();
             reader.close();
-            return process.waitFor() == 0 && !TextUtils.isEmpty(output);
+            return process.waitFor(15, TimeUnit.SECONDS) && process.exitValue() == 0
+                    && !TextUtils.isEmpty(output);
         } catch (Throwable ignored) {
             return false;
         }
@@ -474,7 +494,7 @@ public class AppDetailActivity extends AppCompatActivity {
                 return brace >= 0 ? component.substring(brace + 1) : component;
             }
             reader.close();
-            process.waitFor();
+            process.waitFor(15, TimeUnit.SECONDS);
         } catch (Throwable ignored) {
         }
         return null;

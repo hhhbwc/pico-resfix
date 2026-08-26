@@ -9,6 +9,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 
 import java.io.File;
+import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -44,34 +45,43 @@ public final class Config {
     public static String readRaw() {
         try {
             File f = new File(PATH);
-            if (f.exists() && f.canRead()) {
-                FileInputStream in = new FileInputStream(f);
-                byte[] d = new byte[(int) f.length()];
-                int n = in.read(d);
-                in.close();
-                return new String(d, 0, n, StandardCharsets.UTF_8);
+            if (f.exists() && f.canRead() && f.length() <= ConfigSchema.MAX_CONFIG_BYTES) {
+                try (FileInputStream in = new FileInputStream(f)) {
+                    return readStream(in);
+                }
             }
         } catch (Throwable ignored) {}
 
         try {
             Process p = new ProcessBuilder("su", "-c", "cat '" + PATH + "'").start();
-            java.io.InputStream is = p.getInputStream();
-            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-            byte[] buf = new byte[8192];
-            int l;
-            while ((l = is.read(buf)) != -1) bos.write(buf, 0, l);
-            is.close();
-            if (p.waitFor() == 0) {
-                return new String(bos.toByteArray(), StandardCharsets.UTF_8);
+            String value;
+            try (java.io.InputStream in = p.getInputStream()) {
+                value = readStream(in);
+            }
+            if (p.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0) {
+                return value;
             }
         } catch (Throwable ignored) {}
         return null;
     }
 
+    private static String readStream(java.io.InputStream in) throws java.io.IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = in.read(buffer)) != -1) {
+            if (out.size() + read > ConfigSchema.MAX_CONFIG_BYTES) {
+                throw new java.io.IOException("Configuration is too large");
+            }
+            out.write(buffer, 0, read);
+        }
+        return out.toString(StandardCharsets.UTF_8.name());
+    }
+
     public static JSONObject readRoot() {
         String s = readRaw();
         if (s == null) return new JSONObject();
-        try { return new JSONObject(s); } catch (Throwable t) { return new JSONObject(); }
+        try { return ConfigSchema.parse(s); } catch (Throwable t) { return new JSONObject(); }
     }
 
     public static JSONObject defaultObj(JSONObject root) {
@@ -222,10 +232,11 @@ public final class Config {
     }
 
     // --- write (via su) ---
-    public static boolean writeRoot(JSONObject root) {
+    public static synchronized boolean writeRoot(JSONObject root) {
         String json = root.toString();
         try {
-            new JSONObject(json);
+            ConfigSchema.validate(root);
+            if (json.getBytes(StandardCharsets.UTF_8).length > ConfigSchema.MAX_CONFIG_BYTES) return false;
             String tmp = PATH + ".tmp." + android.os.Process.myPid();
             Process p = new ProcessBuilder("su", "-c",
                     "umask 000; cat > '" + tmp + "' && chmod 666 '" + tmp
@@ -235,11 +246,13 @@ public final class Config {
             os.write(json.getBytes(StandardCharsets.UTF_8));
             os.flush();
             os.close();
-            if (p.waitFor() != 0) return false;
+            if (!p.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) || p.exitValue() != 0) return false;
             
             // Sync to Settings.Global to bypass SELinux file restrictions for the hook
             String escaped = json.replace("'", "'\\''");
-            new ProcessBuilder("su", "-c", "settings put global pico_systemext_coord_resfix_config '" + escaped + "'").start().waitFor();
+            Process settings = new ProcessBuilder("su", "-c",
+                    "settings put global pico_systemext_coord_resfix_config '" + escaped + "'").start();
+            settings.waitFor(15, java.util.concurrent.TimeUnit.SECONDS);
 
             String persisted = readRaw();
             if (persisted == null || !json.equals(persisted)) return false;
@@ -261,7 +274,8 @@ public final class Config {
             }
             Process p = new ProcessBuilder("su", "-c",
                     "settings put global pico_systemext_coord_resfix_panels " + panels
-                            + "; settings put global pico_systemext_coord_resfix_generation $(date +%s)")
+                            + "; settings put global pico_systemext_coord_resfix_generation "
+                            + System.currentTimeMillis())
                     .start();
             p.waitFor();
         } catch (Throwable ignored) {
@@ -271,7 +285,7 @@ public final class Config {
     public static String applyBatchJson(String raw) {
         if (raw == null) return "No input";
         try {
-            JSONObject input = new JSONObject(raw.trim());
+            JSONObject input = ConfigSchema.parse(raw.trim());
             JSONObject root = readRoot();
             JSONObject apps = ensureAppsObj(root);
 
@@ -297,6 +311,11 @@ public final class Config {
 
             if (count <= 0) return "No batch entries";
             root.put("apps", apps);
+            try {
+                ConfigSchema.validate(root);
+            } catch (Throwable t) {
+                return "Invalid configuration: " + t.getMessage();
+            }
             return writeRoot(root) ? "Imported " + count + " item(s)" : "Write failed";
         } catch (Throwable t) {
             return "Import failed: " + t.getClass().getSimpleName();
@@ -305,7 +324,8 @@ public final class Config {
 
     public static boolean applyBatchSettings(List<String> packages, int w, int h, int density,
             boolean enabled, boolean dock) {
-        if (packages == null || packages.isEmpty() || w < 320 || h < 240) return false;
+        if (packages == null || packages.isEmpty() || !ConfigSchema.isResolutionValid(w, h)
+                || (density > 0 && !ConfigSchema.isDensityValid(density))) return false;
         try {
             JSONObject root = readRoot();
             JSONObject apps = ensureAppsObj(root);

@@ -2,8 +2,10 @@ package com.picoxr.resfix;
 
 import android.content.Context;
 import android.provider.Settings;
+
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
@@ -14,136 +16,164 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-/**
- * ResFix hook — per-app virtual-display resolution and dock-mode override for PICO 4.
- *
- * We hook AppContainer.createVirtualDisplay(String,int,int,int,int) in
- * com.picovr.systemext, invoked by AppRecord as createVirtualDisplay("NS_APP[<pkg>]",
- * this.mWidth, this.mHeight, this.mDensity, flags).
- *
- * To avoid the "right-side clipping" caused by overriding only the w/h ARGS (which leaves
- * AppRecord.mScale/mWidth/mHeight inconsistent), we override BOTH:
- *   - the call ARGS (w,h,density)  -> virtual display buffer is created at the target res
- *   - the this-object FIELDS (mWidth,mHeight,mDensity) -> SystemExt's own calculateScale(900/h)
- *     and later resizeSurface() stay consistent, so the on-screen window keeps ~1600x900
- *     physical size while rendering the higher-res buffer (supersample, no clipping).
- *
- * Config: /data/local/tmp/resfix.cfg (JSON)
- *   { "default": { "w":1920,"h":1080,"density":200,"applyThird":true,"applySystem":false },
- *     "apps":    { "<pkg>": { "w":2560,"h":1440,"density":240,"dock":true } } }
- *
- * Dock mode reproduces the SystemExt-visible parts of Pico2Dock's manifest patch at runtime:
- * near-panel routing (type 2002), native 900 x 600 dp layout, resizable-panel support, and
- * persistence while a fullscreen app is shown.
- * It deliberately does not mark the target as a VR app: pvr.2dtovr.mode is consumed outside
- * this Java launch path and treating a normal Android activity as VR would be unsafe.
- */
+/** Per-app virtual-display resolution and dock-mode override for PICO SystemExt. */
 public class ResFix implements IXposedHookLoadPackage {
-
     static final String TAG = "PicoResFix";
     static final String CONFIG = "/data/local/tmp/resfix.cfg";
+    private static final String CONFIG_SETTING = "pico_systemext_coord_resfix_config";
+    private static final String GENERATION_SETTING = "pico_systemext_coord_resfix_generation";
 
     static final class Cfg {
-        int w, h, density = -1;
-        boolean applyThird = true, applySystem = false;
+        final int w;
+        final int h;
+        final int density;
+        final boolean applyThird;
+        final boolean applySystem;
+
+        Cfg(int w, int h, int density, boolean applyThird, boolean applySystem) {
+            this.w = w;
+            this.h = h;
+            this.density = density;
+            this.applyThird = applyThird;
+            this.applySystem = applySystem;
+        }
     }
 
-    private static String readConfigText() {
-        // Try Settings.Global first (bypasses SELinux file restrictions)
+    private static final class Snapshot {
+        final String generation;
+        final JSONObject root;
+
+        Snapshot(String generation, JSONObject root) {
+            this.generation = generation;
+            this.root = root;
+        }
+    }
+
+    private static volatile Snapshot snapshot;
+
+    private static Context systemContext() {
         try {
-            Object at = XposedHelpers.callStaticMethod(
-                    XposedHelpers.findClass("android.app.ActivityThread", null),
-                    "currentActivityThread");
-            if (at != null) {
-                Context ctx = (Context) XposedHelpers.callMethod(at, "getSystemContext");
-                if (ctx != null) {
-                    String s = Settings.Global.getString(ctx.getContentResolver(), "pico_systemext_coord_resfix_config");
-                    if (s != null && !s.isEmpty()) return s;
+            Object activityThread = XposedHelpers.callStaticMethod(
+                    XposedHelpers.findClass("android.app.ActivityThread", null), "currentActivityThread");
+            return activityThread == null ? null
+                    : (Context) XposedHelpers.callMethod(activityThread, "getSystemContext");
+        } catch (Throwable t) {
+            log("failed to obtain system context", t);
+            return null;
+        }
+    }
+
+    private static Snapshot configSnapshot() {
+        Context context = systemContext();
+        String generation = "";
+        String settingsConfig = null;
+        if (context != null) {
+            try {
+                generation = Settings.Global.getString(context.getContentResolver(), GENERATION_SETTING);
+                settingsConfig = Settings.Global.getString(context.getContentResolver(), CONFIG_SETTING);
+            } catch (Throwable t) {
+                log("failed to read configuration settings", t);
+            }
+        }
+        if (generation == null) generation = "";
+        Snapshot current = snapshot;
+        if (current != null && current.generation.equals(generation)) return current;
+
+        JSONObject parsed = parseConfig(settingsConfig, "Settings.Global");
+        if (parsed == null) parsed = parseConfig(readFileConfig(), CONFIG);
+        if (parsed == null) {
+            if (current != null) {
+                log("configuration reload failed; keeping last valid snapshot", null);
+                return current;
+            }
+            parsed = new JSONObject();
+        }
+        Snapshot loaded = new Snapshot(generation, parsed);
+        snapshot = loaded;
+        return loaded;
+    }
+
+    private static JSONObject parseConfig(String text, String source) {
+        if (text == null || text.isEmpty()) return null;
+        try {
+            return ConfigSchema.parse(text);
+        } catch (Throwable t) {
+            log("invalid configuration from " + source, t);
+            return null;
+        }
+    }
+
+    private static String readFileConfig() {
+        try {
+            File file = new File(CONFIG);
+            if (!file.exists() || file.length() > ConfigSchema.MAX_CONFIG_BYTES) return null;
+            try (FileInputStream in = new FileInputStream(file)) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    if (out.size() + read > ConfigSchema.MAX_CONFIG_BYTES) return null;
+                    out.write(buffer, 0, read);
                 }
+                return out.toString(StandardCharsets.UTF_8.name());
             }
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to read config from settings: " + t.getMessage());
-        }
-
-        // Fallback to file
-        try {
-            File f = new File(CONFIG);
-            if (!f.exists()) return null;
-            FileInputStream in = new FileInputStream(f);
-            byte[] data = new byte[(int) f.length()];
-            int n = in.read(data);
-            in.close();
-            return new String(data, 0, n, StandardCharsets.UTF_8);
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to read config file: " + t.getMessage());
+            log("failed to read configuration file", t);
             return null;
         }
     }
 
     static Cfg defaultConfig() {
-        Cfg c = new Cfg();
+        JSONObject value = configSnapshot().root.optJSONObject("default");
+        if (value == null) return new Cfg(0, 0, -1, true, false);
         try {
-            String s = readConfigText();
-            if (s == null) return c;
-            JSONObject root = new JSONObject(s);
-            if (root.has("default")) {
-                JSONObject d = root.getJSONObject("default");
-                c.w = d.optInt("w", 0);
-                c.h = d.optInt("h", 0);
-                c.density = d.has("density") ? d.getInt("density") : -1;
-                c.applyThird = d.optBoolean("applyThird", true);
-                c.applySystem = d.optBoolean("applySystem", false);
-            }
-        } catch (Throwable ignored) {}
-        return c;
+            int width = value.has("w") ? value.getInt("w") : 0;
+            int height = value.has("h") ? value.getInt("h") : 0;
+            int density = value.has("density") ? value.getInt("density") : -1;
+            return new Cfg(width, height, density, value.optBoolean("applyThird", true),
+                    value.optBoolean("applySystem", false));
+        } catch (Throwable t) {
+            log("invalid default configuration", t);
+            return new Cfg(0, 0, -1, true, false);
+        }
     }
 
     static Cfg appConfig(String pkg) {
-        try {
-            String s = readConfigText();
-            if (s == null) return null;
-            JSONObject root = new JSONObject(s);
-            if (!root.has("apps")) return null;
-            JSONObject apps = root.getJSONObject("apps");
-            if (!apps.has(pkg)) return null;
-            JSONObject a = apps.getJSONObject(pkg);
-            if (a.optBoolean("disabled", false)) return null;
-            Cfg c = new Cfg();
-            c.w = a.optInt("w", 0);
-            c.h = a.optInt("h", 0);
-            c.density = a.has("density") ? a.getInt("density") : -1;
-            if (c.w <= 0 || c.h <= 0) return null;
-            return c;
-        } catch (Throwable ignored) { return null; }
-    }
-
-    /**
-     * Per-app window mode override.
-     * null means keep the target APK's native PICO metadata behavior; true selects Dock and
-     * false selects the normal far floating type (3002). A missing "dock" key remains
-     * backwards-compatible as no override.
-     */
-    static Boolean dockOverride(String pkg) {
         if (pkg == null) return null;
+        JSONObject apps = configSnapshot().root.optJSONObject("apps");
+        JSONObject value = apps == null ? null : apps.optJSONObject(pkg);
+        if (value == null || value.optBoolean("disabled", false)) return null;
         try {
-            String s = readConfigText();
-            if (s == null) return null;
-            JSONObject apps = new JSONObject(s).optJSONObject("apps");
-            JSONObject app = apps != null ? apps.optJSONObject(pkg) : null;
-            if (app == null || !app.has("dock")) return null;
-            return app.optBoolean("dock");
-        } catch (Throwable ignored) {
+            int width = value.getInt("w");
+            int height = value.getInt("h");
+            int density = value.has("density") ? value.getInt("density") : -1;
+            return ConfigSchema.isResolutionValid(width, height)
+                    && (density < 0 || ConfigSchema.isDensityValid(density))
+                    ? new Cfg(width, height, density, true, false) : null;
+        } catch (Throwable t) {
             return null;
         }
     }
 
-    static boolean isNonSystemApp(Object container) {
-        if (container == null) return true;
+    /** null preserves the target APK's native PICO metadata behavior. */
+    static Boolean dockOverride(String pkg) {
+        if (pkg == null) return null;
+        JSONObject apps = configSnapshot().root.optJSONObject("apps");
+        JSONObject app = apps == null ? null : apps.optJSONObject(pkg);
+        return app != null && app.has("dock") ? app.optBoolean("dock") : null;
+    }
+
+    static Boolean isSystemApp(Object container) {
+        if (container == null) return null;
         try {
-            java.lang.reflect.Method m = container.getClass().getMethod("isSystemApp");
-            m.setAccessible(true);
-            return !((Boolean) m.invoke(container));
-        } catch (Throwable t) { return true; }
+            java.lang.reflect.Method method = container.getClass().getMethod("isSystemApp");
+            method.setAccessible(true);
+            Object result = method.invoke(container);
+            return result instanceof Boolean ? (Boolean) result : null;
+        } catch (Throwable t) {
+            log("unable to classify app record", t);
+            return null;
+        }
     }
 
     static String pkgFromName(String name) {
@@ -154,169 +184,118 @@ public class ResFix implements IXposedHookLoadPackage {
         return inner.isEmpty() ? null : inner;
     }
 
-    static String fieldString(Object o, String f) {
-        try { return (String) XposedHelpers.getObjectField(o, f); }
+    static String fieldString(Object object, String field) {
+        try { return (String) XposedHelpers.getObjectField(object, field); }
         catch (Throwable t) { return null; }
     }
 
-    /** Fallback pkg from this-object component name. */
-    static String pkgFromThis(Object o) {
+    static String pkgFromThis(Object object) {
         try {
-            Object cn = XposedHelpers.getObjectField(o, "mComponentName");
-            if (cn != null) {
-                String p = (String) cn.getClass().getMethod("getPackageName").invoke(cn);
-                if (p != null) return p;
-            }
-        } catch (Throwable ignored) {}
-        return null;
+            Object componentName = XposedHelpers.getObjectField(object, "mComponentName");
+            return componentName == null ? null : (String) componentName.getClass()
+                    .getMethod("getPackageName").invoke(componentName);
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
-    /**
-     * Decide target config. Returns null when this AppRecord should NOT be resized.
-     */
+    /** Returns null when this AppRecord should not be resized. */
     static Cfg decide(String pkg, Object appRecord) {
         if ("com.picoxr.resfix".equals(pkg)) return null;
-        boolean sys = !isNonSystemApp(appRecord);
-        Cfg app = (pkg != null) ? appConfig(pkg) : null;
+        Cfg app = appConfig(pkg);
         if (app != null) return app;
-        Cfg glob = defaultConfig();
-        if (sys && !glob.applySystem) return null;
-        if (!sys && !glob.applyThird) return null;
-        if (glob.w <= 0 || glob.h <= 0) return null;
-        return glob;
+        Cfg global = defaultConfig();
+        if (!ConfigSchema.isResolutionValid(global.w, global.h)) return null;
+        Boolean system = isSystemApp(appRecord);
+        if (system == null) return null;
+        if (system && !global.applySystem) return null;
+        if (!system && !global.applyThird) return null;
+        return global;
     }
 
     @Override
-    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lp) throws Throwable {
+    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lp) {
         if (!"com.picovr.systemext".equals(lp.packageName)) return;
+        installResolutionHook(lp);
+        installDockHooks(lp);
+    }
 
+    private static void installResolutionHook(XC_LoadPackage.LoadPackageParam lp) {
         try {
-            Class<?> activityInfo = XposedHelpers.findClass("android.content.pm.ActivityInfo", lp.classLoader);
-            Class<?> appManagerUtils = XposedHelpers.findClass(
-                    "com.bytedance.nativeshell.appmanager.AppManagerUtils", lp.classLoader);
-
-            // AppRecord construction resolves the window type through this method. Returning 2002
-            // before the record is built routes the app into the native near-panel Dock stack
-            // without changing its installed package metadata.
-            XposedHelpers.findAndHookMethod(appManagerUtils, "getWindowType", activityInfo,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            Object info = param.args[0];
-                            String pkg = fieldString(info, "packageName");
-                            if ("com.picoxr.resfix".equals(pkg)) return;
-                            Boolean dock = dockOverride(pkg);
-                            if (dock == null) return;
-                            param.setResult(dock ? 2002 : 3002);
-                            XposedBridge.log(TAG + ": " + pkg + " -> "
-                                    + (dock ? "Dock (type 2002)" : "Floating (type 3002)"));
-                        }
-                    });
-
-            Class<?> appRecord = XposedHelpers.findClass(
-                    "com.bytedance.nativeshell.appmanager.AppRecord", lp.classLoader);
-
-            // ActivityStarterControl reaches this sibling resolver via isNearPanel(). Hook it as
-            // well so a Dock app is immediately allowed while an immersive VR activity is active,
-            // matching the native near-panel policy rather than merely changing its final layer.
-            XposedHelpers.findAndHookMethod(appRecord, "getWindowType", activityInfo,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            Object info = param.args[0];
-                            String pkg = fieldString(info, "packageName");
-                            if ("com.picoxr.resfix".equals(pkg)) return;
-                            Boolean dock = dockOverride(pkg);
-                            if (dock != null) param.setResult(dock ? 2002 : 3002);
-                        }
-                    });
-
-            // Pico2Dock writes android:resizeableActivity="true" into every activity. SystemExt
-            // records the parsed flag in mAppResizeable; keep that state true for runtime-Docked
-            // apps so panel resize affordances do not depend on the original APK manifest.
-            XposedHelpers.findAndHookMethod(appRecord, "prepareAppData", "android.content.Context",
-                    new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            String pkg = pkgFromThis(param.thisObject);
-                            Boolean dock = dockOverride(pkg);
-                            if (dock == null) return;
-                            try {
-                                XposedHelpers.setObjectField(param.thisObject, "mAppResizeable", dock);
-                            } catch (Throwable ignored) {}
-                        }
-                    });
-            XposedHelpers.findAndHookMethod(appRecord, "resizeable", new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    Boolean dock = dockOverride(pkgFromThis(param.thisObject));
-                    if (dock != null) param.setResult(dock);
-                }
-            });
-
             Class<?> appContainer = XposedHelpers.findClass(
                     "com.bytedance.nativeshell.appmanager.AppContainer", lp.classLoader);
-
-            // A NoNavigationBar/fullscreen AppRecord normally hides every visible 2002 panel
-            // through updateVisible(false, VISIBLE_CHANGE_BY_HIDE_BY_FULLSCREEN_SHOW == 6).
-            // Pico2Dock's custom-panel path remains usable in fullscreen content, so preserve
-            // only configured Dock records for that specific reason. User closes, Home, screen
-            // state, seethrough, and every non-Dock panel keep the stock visibility policy.
-            XposedHelpers.findAndHookMethod(appContainer, "updateVisible", boolean.class, int.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            boolean visible = (Boolean) param.args[0];
-                            int changeType = (Integer) param.args[1];
-                            String pkg = pkgFromThis(param.thisObject);
-                            if (!visible && changeType == 6 && Boolean.TRUE.equals(dockOverride(pkg))) {
-                                XposedBridge.log(TAG + ": keep Dock visible during fullscreen " + pkg);
-                                param.setResult(false);
-                            }
-                        }
-                    });
-
             XposedHelpers.findAndHookMethod(appContainer, "createVirtualDisplay",
-                    String.class, int.class, int.class, int.class, int.class,
-                    new XC_MethodHook() {
+                    String.class, int.class, int.class, int.class, int.class, new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
                             String name = (String) param.args[0];
                             String pkg = pkgFromName(name);
-                            if (pkg == null) return;   // not a flat 2D app (e.g. NS_WINDOW_/caption)
-
+                            if (pkg == null) return;
                             Cfg cfg = decide(pkg, param.thisObject);
-                            if (cfg == null || cfg.w <= 0 || cfg.h <= 0) return;
-
-                            int ow = (Integer) param.args[1];
-                            int oh = (Integer) param.args[2];
-                            int od = (Integer) param.args[3];
-
-                            // override call args (virtual display buffer)
+                            if (cfg == null) return;
                             param.args[1] = cfg.w;
                             param.args[2] = cfg.h;
                             if (cfg.density > 0) param.args[3] = cfg.density;
-
-                            // override this-object fields so mScale + later resizeSurface stay consistent
                             try {
                                 XposedHelpers.setIntField(param.thisObject, "mWidth", cfg.w);
                                 XposedHelpers.setIntField(param.thisObject, "mHeight", cfg.h);
-                                if (cfg.density > 0) {
-                                    XposedHelpers.setIntField(param.thisObject, "mDensity", cfg.density);
-                                }
-                            } catch (Throwable ignored) {}
-
-                            int nd = (Integer) param.args[3];
-                            boolean sys = !isNonSystemApp(param.thisObject);
-                            XposedBridge.log(TAG + ": " + name + " " + (sys ? "[sys]" : "[3rd]")
-                                    + " " + ow + "x" + oh + "@" + od + " -> " + cfg.w + "x" + cfg.h + "@" + nd
-                                    + " (mScale-consistent)");
+                                if (cfg.density > 0) XposedHelpers.setIntField(param.thisObject, "mDensity", cfg.density);
+                            } catch (Throwable t) {
+                                log("failed to update AppContainer dimensions", t);
+                            }
                         }
                     });
-            XposedBridge.log(TAG + ": installed (per-app resolution + Dock mode)");
+            XposedBridge.log(TAG + ": installed resolution hook");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": hook failed");
-            XposedBridge.log(t);
+            log("failed to install resolution hook", t);
         }
+    }
+
+    private static void installDockHooks(XC_LoadPackage.LoadPackageParam lp) {
+        try {
+            Class<?> activityInfo = XposedHelpers.findClass("android.content.pm.ActivityInfo", lp.classLoader);
+            Class<?> appManagerUtils = XposedHelpers.findClass(
+                    "com.bytedance.nativeshell.appmanager.AppManagerUtils", lp.classLoader);
+            Class<?> appRecord = XposedHelpers.findClass(
+                    "com.bytedance.nativeshell.appmanager.AppRecord", lp.classLoader);
+            Class<?> appContainer = XposedHelpers.findClass(
+                    "com.bytedance.nativeshell.appmanager.AppContainer", lp.classLoader);
+            XC_MethodHook windowTypeHook = new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    String pkg = fieldString(param.args[0], "packageName");
+                    Boolean dock = dockOverride(pkg);
+                    if (dock != null && !"com.picoxr.resfix".equals(pkg)) param.setResult(dock ? 2002 : 3002);
+                }
+            };
+            XposedHelpers.findAndHookMethod(appManagerUtils, "getWindowType", activityInfo, windowTypeHook);
+            XposedHelpers.findAndHookMethod(appRecord, "getWindowType", activityInfo, windowTypeHook);
+            XposedHelpers.findAndHookMethod(appRecord, "prepareAppData", "android.content.Context", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    Boolean dock = dockOverride(pkgFromThis(param.thisObject));
+                    if (dock != null) XposedHelpers.setObjectField(param.thisObject, "mAppResizeable", dock);
+                }
+            });
+            XposedHelpers.findAndHookMethod(appRecord, "resizeable", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    Boolean dock = dockOverride(pkgFromThis(param.thisObject));
+                    if (dock != null) param.setResult(dock);
+                }
+            });
+            XposedHelpers.findAndHookMethod(appContainer, "updateVisible", boolean.class, int.class, new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    if (!(Boolean) param.args[0] && (Integer) param.args[1] == 6
+                            && Boolean.TRUE.equals(dockOverride(pkgFromThis(param.thisObject)))) {
+                        param.setResult(false);
+                    }
+                }
+            });
+            XposedBridge.log(TAG + ": installed dock hooks");
+        } catch (Throwable t) {
+            log("failed to install dock hooks", t);
+        }
+    }
+
+    private static void log(String message, Throwable error) {
+        XposedBridge.log(TAG + ": " + message + (error == null ? "" : " (" + error + ")"));
     }
 }
