@@ -135,24 +135,28 @@ public class AppListActivity extends AppCompatActivity {
             updateFilterButtonStyle(btnVR, showVR);
 
             btnMod.setOnClickListener(v -> {
+                if (showModified && !showUser && !showSystem && !showVR) return;
                 showModified = !showModified;
                 updateFilterButtonStyle(btnMod, showModified);
                 saveFilters();
                 reload();
             });
             btnUser.setOnClickListener(v -> {
+                if (!showModified && showUser && !showSystem && !showVR) return;
                 showUser = !showUser;
                 updateFilterButtonStyle(btnUser, showUser);
                 saveFilters();
                 reload();
             });
             btnSys.setOnClickListener(v -> {
+                if (!showModified && !showUser && showSystem && !showVR) return;
                 showSystem = !showSystem;
                 updateFilterButtonStyle(btnSys, showSystem);
                 saveFilters();
                 reload();
             });
             btnVR.setOnClickListener(v -> {
+                if (!showModified && !showUser && !showSystem && showVR) return;
                 showVR = !showVR;
                 updateFilterButtonStyle(btnVR, showVR);
                 saveFilters();
@@ -163,17 +167,20 @@ public class AppListActivity extends AppCompatActivity {
     }
 
     private void saveFilters() {
-        try {
-            org.json.JSONObject root = Config.readRoot();
-            org.json.JSONObject defaults = Config.defaultObj(root);
-            defaults.put("showUser", showUser);
-            defaults.put("showSystem", showSystem);
-            defaults.put("showVR", showVR);
-            defaults.put("showModified", showModified);
-            root.put("default", defaults);
-            Config.writeRoot(root);
-        } catch (Throwable ignored) {
-        }
+        final boolean u = showUser, s = showSystem, v = showVR, m = showModified;
+        executor.execute(() -> {
+            try {
+                org.json.JSONObject root = Config.readRoot();
+                org.json.JSONObject defaults = Config.defaultObj(root);
+                defaults.put("showUser", u);
+                defaults.put("showSystem", s);
+                defaults.put("showVR", v);
+                defaults.put("showModified", m);
+                root.put("default", defaults);
+                Config.writeRoot(root);
+            } catch (Throwable ignored) {
+            }
+        });
     }
 
     @Override
@@ -194,9 +201,13 @@ public class AppListActivity extends AppCompatActivity {
                 .setMessage("Paste JSON with default and/or apps. Existing entries with the same package will be replaced.")
                 .setView(input)
                 .setPositiveButton("Import", (d, which) -> {
-                    String result = Config.applyBatchJson(String.valueOf(input.getText()));
-                    android.widget.Toast.makeText(this, result, android.widget.Toast.LENGTH_LONG).show();
-                    reload();
+                    executor.execute(() -> {
+                        String result = Config.applyBatchJson(String.valueOf(input.getText()));
+                        handler.post(() -> {
+                            android.widget.Toast.makeText(this, result, android.widget.Toast.LENGTH_LONG).show();
+                            reload();
+                        });
+                    });
                 })
                 .setNegativeButton(android.R.string.cancel, (d, which) -> exitSelectionMode())
                 .show();
@@ -260,25 +271,27 @@ public class AppListActivity extends AppCompatActivity {
     }
 
     void reload() {
-        glob = Config.getGlobal();
-        showUser = glob.showUser;
-        showSystem = glob.showSystem;
-        showVR = glob.showVR;
-        showModified = glob.showModified;
-        allApps = Config.listApps(this, showUser, showSystem, showVR, showModified, glob);
+        final boolean u = showUser, s = showSystem, v = showVR, m = showModified;
+        executor.execute(() -> {
+            Config.GlobalCfg currentGlob = Config.getGlobal();
+            List<Config.AppEntry> result = Config.listApps(this, u, s, v, m, currentGlob);
 
-        // Sort: Custom first, then by label alphabet
-        allApps.sort((a, b) -> {
-            if (a.hasOverride != b.hasOverride) {
-                return a.hasOverride ? -1 : 1;
-            }
-            return String.valueOf(a.label).compareToIgnoreCase(String.valueOf(b.label));
+            // Sort: Custom first, then by label alphabet
+            result.sort((a, b) -> {
+                if (a.hasOverride != b.hasOverride) {
+                    return a.hasOverride ? -1 : 1;
+                }
+                return String.valueOf(a.label).compareToIgnoreCase(String.valueOf(b.label));
+            });
+
+            handler.post(() -> {
+                glob = currentGlob;
+                allApps = result;
+                android.util.Log.i("ResFixGUI", "listApps returned " + allApps.size()
+                        + " apps (showUser=" + u + ", showSystem=" + s + ")");
+                filter(etSearch.getText().toString());
+            });
         });
-
-        android.util.Log.i("ResFixGUI", "listApps returned " + allApps.size()
-                + " apps (showUser=" + showUser + ", showSystem=" + showSystem + ")");
-        
-        filter(etSearch.getText().toString());
     }
 
     void filter(String query) {

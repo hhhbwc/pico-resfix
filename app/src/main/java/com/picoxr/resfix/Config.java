@@ -159,6 +159,14 @@ public final class Config {
                 String pkg = ai.packageName;
                 if (pkg == null || pkg.equals(ctx.getPackageName())) continue; // hide ourselves
 
+                // Filter out apps that don't have any activities
+                try {
+                    PackageInfo pi = pm.getPackageInfo(pkg, PackageManager.GET_ACTIVITIES);
+                    if (pi.activities == null || pi.activities.length == 0) continue;
+                } catch (PackageManager.NameNotFoundException ignored) {
+                    continue;
+                }
+
                 boolean isVR = ai.metaData != null && "vr".equals(ai.metaData.getString("pvr.app.type"));
                 boolean isDock = isAppDockMode(pm, pkg, ai);
                 boolean isSystem = (ai.flags & (ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0;
@@ -204,7 +212,7 @@ public final class Config {
                         if (!isSystem && !showUser) continue;
                     }
                 }
-                
+
                 AppEntry e = new AppEntry();
                 e.pkg = pkg;
                 CharSequence lb = ai.loadLabel(pm);
@@ -274,7 +282,7 @@ public final class Config {
                 if (p.isAlive()) p.destroyForcibly();
                 return false;
             }
-            
+
             // Sync to Settings.Global to bypass SELinux file restrictions for the hook
             String escaped = json.replace("'", "'\\''");
             Process settings = new ProcessBuilder("su", "-c",
