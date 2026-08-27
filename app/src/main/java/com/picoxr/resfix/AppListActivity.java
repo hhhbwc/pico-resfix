@@ -135,24 +135,28 @@ public class AppListActivity extends AppCompatActivity {
             updateFilterButtonStyle(btnVR, showVR);
 
             btnMod.setOnClickListener(v -> {
+                if (showModified && !showUser && !showSystem && !showVR) return;
                 showModified = !showModified;
                 updateFilterButtonStyle(btnMod, showModified);
                 saveFilters();
                 reload();
             });
             btnUser.setOnClickListener(v -> {
+                if (!showModified && showUser && !showSystem && !showVR) return;
                 showUser = !showUser;
                 updateFilterButtonStyle(btnUser, showUser);
                 saveFilters();
                 reload();
             });
             btnSys.setOnClickListener(v -> {
+                if (!showModified && !showUser && showSystem && !showVR) return;
                 showSystem = !showSystem;
                 updateFilterButtonStyle(btnSys, showSystem);
                 saveFilters();
                 reload();
             });
             btnVR.setOnClickListener(v -> {
+                if (!showModified && !showUser && !showSystem && showVR) return;
                 showVR = !showVR;
                 updateFilterButtonStyle(btnVR, showVR);
                 saveFilters();
