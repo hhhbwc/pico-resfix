@@ -53,6 +53,8 @@ public class AppDetailActivity extends AppCompatActivity {
     TextInputEditText etW, etH, etDensity;
     MaterialButton btnSave, btnSaveAndApply, btnRemove, btnSwapVal;
     private static final ExecutorService restartExecutor = Executors.newSingleThreadExecutor();
+    private boolean loadingCurrent;
+    private boolean preserveDockSelection;
 
     final String[] resFloatArr = {"1280 × 722","1600 × 902","1920 × 1082","2560 × 1442","3840 × 2162"};
     final String[] resDockArr = {"807 × 432","1127 × 752","1447 × 1072","1767 × 1392","2087 × 1712"};
@@ -161,12 +163,14 @@ public class AppDetailActivity extends AppCompatActivity {
         });
 
         loadCurrent();
-        if (TextUtils.isEmpty(pkg) && !isBatch) {
-            cardDock.setVisibility(View.GONE);
-        }
-        
         cardEnable.setOnClickListener(v -> swEnable.toggle());
         cardDock.setOnClickListener(v -> swDock.toggle());
+        swDock.setOnCheckedChangeListener((x, checked) -> {
+            if (!loadingCurrent && !isBatchMode()) {
+                preserveDockSelection = true;
+                loadCurrent();
+            }
+        });
 
         swEnable.setOnCheckedChangeListener((x, checked) -> {
             spPreset.setEnabled(checked);
@@ -206,6 +210,7 @@ public class AppDetailActivity extends AppCompatActivity {
     }
 
     void loadCurrent() {
+        loadingCurrent = true;
         Config.GlobalCfg glob = Config.getGlobal();
         if (isBatchMode()) {
             etW.setText(String.valueOf(glob.floatingWidth));
@@ -213,12 +218,15 @@ public class AppDetailActivity extends AppCompatActivity {
             etDensity.setText("");
             swEnable.setChecked(true);
             swDock.setChecked(false);
+            loadingCurrent = false;
             return;
         }
         JSONObject root = Config.readRoot();
         JSONObject target = null;
         boolean enabled = true;
         boolean isDock = TextUtils.isEmpty(pkg) && swDock.isChecked();
+        boolean useSelectedDock = preserveDockSelection;
+        preserveDockSelection = false;
         try {
             if (TextUtils.isEmpty(pkg)) {
                 target = Config.defaultObj(root);
@@ -229,10 +237,12 @@ public class AppDetailActivity extends AppCompatActivity {
                     enabled = !target.optBoolean("disabled", false);
                     // Keep legacy resolution-only entries on the APK's native window route.
                     // A missing dock key means no window-mode override, not Floating.
-                    isDock = target.has("dock")
-                            ? target.optBoolean("dock", false)
-                            : Config.isAppDockMode(getPackageManager(), pkg, null);
-                } else {
+                    if (!useSelectedDock) {
+                        isDock = target.has("dock")
+                                ? target.optBoolean("dock", false)
+                                : Config.isAppDockMode(getPackageManager(), pkg, null);
+                    }
+                } else if (!useSelectedDock) {
                     isDock = Config.isAppDockMode(getPackageManager(), pkg, null);
                 }
             }
@@ -286,6 +296,7 @@ public class AppDetailActivity extends AppCompatActivity {
         spPreset.setEnabled(en);
         spPresetSwap.setEnabled(en);
         etW.setEnabled(en); etH.setEnabled(en); etDensity.setEnabled(en);
+        loadingCurrent = false;
     }
 
     void save(boolean applyAfterSaving) {
@@ -299,7 +310,7 @@ public class AppDetailActivity extends AppCompatActivity {
         try {
             if (isBatchMode()) {
                 String densityText = etDensity.getText() != null ? etDensity.getText().toString().trim() : "";
-                int density = TextUtils.isEmpty(densityText) ? -1 : parseIntStr(densityText);
+                int density = parseOptionalDensity(densityText);
                 boolean ok = Config.applyBatchSettings(batchPackages, w, h, density,
                         swEnable.isChecked(), swDock.isChecked());
                 Toast.makeText(this, ok ? getString(R.string.batch_updated, batchPackages.size())
@@ -310,7 +321,11 @@ public class AppDetailActivity extends AppCompatActivity {
                 }
                 return;
             }
-            JSONObject root = Config.readRoot();
+            JSONObject root = Config.readRootForWrite();
+            if (root == null) {
+                Toast.makeText(this, R.string.write_failed, Toast.LENGTH_LONG).show();
+                return;
+            }
             if (TextUtils.isEmpty(pkg)) {
                 JSONObject target = Config.defaultObj(root);
                 root.put("default", target);
@@ -347,7 +362,11 @@ public class AppDetailActivity extends AppCompatActivity {
 
     void removeOverride() {
         try {
-            JSONObject root = Config.readRoot();
+            JSONObject root = Config.readRootForWrite();
+            if (root == null) {
+                Toast.makeText(this, R.string.write_failed, Toast.LENGTH_LONG).show();
+                return;
+            }
             if (!TextUtils.isEmpty(pkg)) {
                 JSONObject apps = Config.appsObj(root);
                 apps.remove(pkg);
@@ -488,6 +507,7 @@ public class AppDetailActivity extends AppCompatActivity {
                     .start();
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             String line;
+            String result = null;
             while ((line = reader.readLine()) != null) {
                 int marker = line.indexOf("mCurrentFocus=");
                 if (marker < 0) continue;
@@ -496,10 +516,12 @@ public class AppDetailActivity extends AppCompatActivity {
                 int space = line.lastIndexOf(' ', slash);
                 String component = line.substring(space + 1, slash).trim();
                 int brace = component.lastIndexOf('}');
-                return brace >= 0 ? component.substring(brace + 1) : component;
+                result = brace >= 0 ? component.substring(brace + 1) : component;
+                break;
             }
             reader.close();
-            if (!process.waitFor(15, TimeUnit.SECONDS)) process.destroyForcibly();
+            if (!process.waitFor(15, TimeUnit.SECONDS) && process.isAlive()) process.destroyForcibly();
+            return result;
         } catch (Throwable ignored) {
         }
         return null;
@@ -522,7 +544,16 @@ public class AppDetailActivity extends AppCompatActivity {
         try { return Integer.parseInt(e.getText().toString().trim()); } catch (Throwable t) { return def; }
     }
     static int parseIntStr(String s) {
-        try { return Integer.parseInt(s); } catch (Throwable t) { return 0; }
+        return Integer.parseInt(s.trim());
+    }
+
+    static int parseOptionalDensity(String s) {
+        if (TextUtils.isEmpty(s)) return -1;
+        int density = parseIntStr(s);
+        if (!ConfigSchema.isDensityValid(density)) {
+            throw new IllegalArgumentException("Invalid density");
+        }
+        return density;
     }
 
     private void setupAutoMarquee(TextView tv) {

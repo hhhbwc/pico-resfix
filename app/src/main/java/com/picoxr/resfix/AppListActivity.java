@@ -37,6 +37,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -287,9 +288,10 @@ public class AppListActivity extends AppCompatActivity {
             filtered = allApps;
         } else {
             filtered = new java.util.ArrayList<>();
-            String q = query.toLowerCase();
+            String q = query.toLowerCase(Locale.ROOT);
             for (Config.AppEntry e : allApps) {
-                if (String.valueOf(e.label).toLowerCase().contains(q) || e.pkg.toLowerCase().contains(q)) {
+                if (String.valueOf(e.label).toLowerCase(Locale.ROOT).contains(q)
+                        || e.pkg.toLowerCase(Locale.ROOT).contains(q)) {
                     filtered.add(e);
                 }
             }

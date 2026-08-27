@@ -54,13 +54,18 @@ public final class Config {
         } catch (Throwable ignored) {}
 
         try {
-            Process p = new ProcessBuilder("su", "-c", "cat '" + PATH + "'").start();
-            String value;
-            try (java.io.InputStream in = p.getInputStream()) {
-                value = readStream(in);
-            }
-            if (p.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0) {
-                return value;
+            Process p = new ProcessBuilder("su", "-c", "cat '" + PATH + "'")
+                    .redirectErrorStream(true).start();
+            try {
+                String value;
+                try (java.io.InputStream in = p.getInputStream()) {
+                    value = readStream(in);
+                }
+                if (p.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0) {
+                    return value;
+                }
+            } finally {
+                if (p.isAlive()) p.destroyForcibly();
             }
         } catch (Throwable ignored) {}
         return null;
@@ -83,6 +88,15 @@ public final class Config {
         String s = readRaw();
         if (s == null) return new JSONObject();
         try { return ConfigSchema.parse(s); } catch (Throwable t) { return new JSONObject(); }
+    }
+
+    /** Returns null when an existing configuration cannot be read or validated. */
+    public static JSONObject readRootForWrite() {
+        String s = readRaw();
+        if (s == null) {
+            return new File(PATH).exists() ? null : new JSONObject();
+        }
+        try { return ConfigSchema.parse(s); } catch (Throwable t) { return null; }
     }
 
     public static JSONObject defaultObj(JSONObject root) {
@@ -256,7 +270,10 @@ public final class Config {
             os.write(json.getBytes(StandardCharsets.UTF_8));
             os.flush();
             os.close();
-            if (!p.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) || p.exitValue() != 0) return false;
+            if (!p.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) || p.exitValue() != 0) {
+                if (p.isAlive()) p.destroyForcibly();
+                return false;
+            }
             
             // Sync to Settings.Global to bypass SELinux file restrictions for the hook
             String escaped = json.replace("'", "'\\''");
@@ -264,6 +281,7 @@ public final class Config {
                     "settings put global pico_systemext_coord_resfix_config '" + escaped + "'").start();
             boolean settingsWritten = settings.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
                     && settings.exitValue() == 0;
+            if (!settingsWritten && settings.isAlive()) settings.destroyForcibly();
             String persisted = readRaw();
             if (!settingsWritten) {
                 // The file is authoritative; Settings.Global is only a restricted-device fallback.
@@ -292,7 +310,9 @@ public final class Config {
                             + "; settings put global pico_systemext_coord_resfix_generation "
                             + System.currentTimeMillis())
                     .start();
-            p.waitFor();
+            if (!p.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) && p.isAlive()) {
+                p.destroyForcibly();
+            }
         } catch (Throwable ignored) {
         }
     }
@@ -301,7 +321,8 @@ public final class Config {
         if (raw == null) return "No input";
         try {
             JSONObject input = ConfigSchema.parse(raw.trim());
-            JSONObject root = readRoot();
+            JSONObject root = readRootForWrite();
+            if (root == null) return "Unable to read existing configuration";
             JSONObject apps = ensureAppsObj(root);
 
             int count = 0;
@@ -342,8 +363,10 @@ public final class Config {
         if (packages == null || packages.isEmpty() || !ConfigSchema.isResolutionValid(w, h)
                 || (density > 0 && !ConfigSchema.isDensityValid(density))) return false;
         try {
-            JSONObject root = readRoot();
+            JSONObject root = readRootForWrite();
+            if (root == null) return false;
             JSONObject apps = ensureAppsObj(root);
+            int changed = 0;
             for (String pkg : packages) {
                 if (pkg == null || pkg.isEmpty() || "com.picoxr.resfix".equals(pkg)) continue;
                 JSONObject entry = apps.optJSONObject(pkg);
@@ -354,9 +377,10 @@ public final class Config {
                 entry.put(prefix + "w", w);
                 entry.put(prefix + "h", h);
                 if (density > 0) entry.put(prefix + "density", density);
-                else entry.remove(prefix + "density");
                 apps.put(pkg, entry);
+                changed++;
             }
+            if (changed == 0) return false;
             root.put("apps", apps);
             return writeRoot(root);
         } catch (Throwable t) {
