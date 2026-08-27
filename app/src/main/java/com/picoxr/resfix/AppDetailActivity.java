@@ -224,7 +224,7 @@ public class AppDetailActivity extends AppCompatActivity {
         JSONObject root = Config.readRoot();
         JSONObject target = null;
         boolean enabled = true;
-        boolean isDock = TextUtils.isEmpty(pkg) && swDock.isChecked();
+        boolean isDock = swDock.isChecked();
         boolean useSelectedDock = preserveDockSelection;
         preserveDockSelection = false;
         try {
