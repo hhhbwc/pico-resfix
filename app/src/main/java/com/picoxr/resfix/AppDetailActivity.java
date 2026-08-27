@@ -321,33 +321,28 @@ public class AppDetailActivity extends AppCompatActivity {
                 }
                 return;
             }
-            JSONObject root = Config.readRootForWrite();
-            if (root == null) {
-                Toast.makeText(this, R.string.write_failed, Toast.LENGTH_LONG).show();
-                return;
-            }
-            if (TextUtils.isEmpty(pkg)) {
-                JSONObject target = Config.defaultObj(root);
-                root.put("default", target);
-                String pfx = isDockInEditor ? "near_" : "";
-                target.put(pfx + "w", w); target.put(pfx + "h", h);
-                String d = etDensity.getText() != null ? etDensity.getText().toString().trim() : "";
-                if (!TextUtils.isEmpty(d)) target.put(pfx + "density", parseIntStr(d));
-                else target.remove(pfx + "density");
-            } else {
-                JSONObject apps = Config.appsObj(root);
-                JSONObject target = apps.optJSONObject(pkg);
-                if (target == null) { target = new JSONObject(); apps.put(pkg, target); }
-                root.put("apps", apps);
-                target.put("disabled", !swEnable.isChecked());
-                target.put("dock", swDock.isChecked());
-                String pfx = swDock.isChecked() ? "near_" : "";
-                target.put(pfx + "w", w); target.put(pfx + "h", h);
-                String d = etDensity.getText() != null ? etDensity.getText().toString().trim() : "";
-                if (!TextUtils.isEmpty(d)) target.put(pfx + "density", parseIntStr(d));
-                else target.remove(pfx + "density");
-            }
-            boolean ok = Config.writeRoot(root);
+            final String densityText = etDensity.getText() != null ? etDensity.getText().toString().trim() : "";
+            boolean ok = Config.updateRoot(root -> {
+                if (TextUtils.isEmpty(pkg)) {
+                    JSONObject target = Config.defaultObj(root);
+                    root.put("default", target);
+                    String pfx = isDockInEditor ? "near_" : "";
+                    target.put(pfx + "w", w); target.put(pfx + "h", h);
+                    if (!TextUtils.isEmpty(densityText)) target.put(pfx + "density", parseIntStr(densityText));
+                    else target.remove(pfx + "density");
+                } else {
+                    JSONObject apps = Config.appsObj(root);
+                    JSONObject target = apps.optJSONObject(pkg);
+                    if (target == null) { target = new JSONObject(); apps.put(pkg, target); }
+                    root.put("apps", apps);
+                    target.put("disabled", !swEnable.isChecked());
+                    target.put("dock", swDock.isChecked());
+                    String pfx = swDock.isChecked() ? "near_" : "";
+                    target.put(pfx + "w", w); target.put(pfx + "h", h);
+                    if (!TextUtils.isEmpty(densityText)) target.put(pfx + "density", parseIntStr(densityText));
+                    else target.remove(pfx + "density");
+                }
+            });
             Toast.makeText(this, ok ? getString(R.string.saved_toast) : getString(R.string.write_failed), Toast.LENGTH_LONG).show();
             if (ok) {
                 if (applyAfterSaving && !TextUtils.isEmpty(pkg)) {
@@ -362,19 +357,15 @@ public class AppDetailActivity extends AppCompatActivity {
 
     void removeOverride() {
         try {
-            JSONObject root = Config.readRootForWrite();
-            if (root == null) {
-                Toast.makeText(this, R.string.write_failed, Toast.LENGTH_LONG).show();
-                return;
-            }
-            if (!TextUtils.isEmpty(pkg)) {
-                JSONObject apps = Config.appsObj(root);
-                apps.remove(pkg);
-                root.put("apps", apps);
-            } else {
-                root.remove("default");
-            }
-            boolean ok = Config.writeRoot(root);
+            boolean ok = Config.updateRoot(root -> {
+                if (!TextUtils.isEmpty(pkg)) {
+                    JSONObject apps = Config.appsObj(root);
+                    apps.remove(pkg);
+                    root.put("apps", apps);
+                } else {
+                    root.remove("default");
+                }
+            });
             Toast.makeText(this, ok ? getString(R.string.remove_toast) : getString(R.string.write_failed), Toast.LENGTH_LONG).show();
             if (ok) finish();
         } catch (Throwable t) { Toast.makeText(this, R.string.failed, Toast.LENGTH_SHORT).show(); }

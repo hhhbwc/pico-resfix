@@ -40,6 +40,8 @@ import java.util.Set;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Main screen: lists installed 2D (launcher) apps. A "show system apps" switch filters
@@ -63,7 +65,11 @@ public class AppListActivity extends AppCompatActivity {
     boolean showModified = true;
     private List<Config.AppEntry> allApps;
     private final ExecutorService executor = Executors.newFixedThreadPool(4);
+    private final ExecutorService configExecutor = Executors.newSingleThreadExecutor();
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final AtomicLong reloadGeneration = new AtomicLong();
+    private Future<?> reloadFuture;
+    private volatile boolean destroyed;
     private final Map<String, Drawable> iconCache = new HashMap<>();
     private final Set<String> selectedPackages = new HashSet<>();
     private boolean selectionMode;
@@ -84,6 +90,11 @@ public class AppListActivity extends AppCompatActivity {
         fabBatchEdit = findViewById(R.id.fab_batch_edit);
         etSearch = findViewById(R.id.et_search);
         ivClearSearch = findViewById(R.id.iv_clear_search);
+        Config.GlobalCfg saved = Config.getGlobal();
+        showUser = saved.showUser;
+        showSystem = saved.showSystem;
+        showVR = saved.showVR;
+        showModified = saved.showModified;
 
         recycler.setLayoutManager(new GridLayoutManager(this, 2));
         adapter = new AppAdapter();
@@ -129,10 +140,7 @@ public class AppListActivity extends AppCompatActivity {
             MaterialButton btnSys = actionView.findViewById(R.id.btn_filter_system);
             MaterialButton btnVR = actionView.findViewById(R.id.btn_filter_vr);
 
-            updateFilterButtonStyle(btnMod, showModified);
-            updateFilterButtonStyle(btnUser, showUser);
-            updateFilterButtonStyle(btnSys, showSystem);
-            updateFilterButtonStyle(btnVR, showVR);
+            renderFilterButtons(actionView);
 
             btnMod.setOnClickListener(v -> {
                 if (showModified && !showUser && !showSystem && !showVR) return;
@@ -168,19 +176,14 @@ public class AppListActivity extends AppCompatActivity {
 
     private void saveFilters() {
         final boolean u = showUser, s = showSystem, v = showVR, m = showModified;
-        executor.execute(() -> {
-            try {
-                org.json.JSONObject root = Config.readRoot();
-                org.json.JSONObject defaults = Config.defaultObj(root);
-                defaults.put("showUser", u);
-                defaults.put("showSystem", s);
-                defaults.put("showVR", v);
-                defaults.put("showModified", m);
-                root.put("default", defaults);
-                Config.writeRoot(root);
-            } catch (Throwable ignored) {
-            }
-        });
+        configExecutor.execute(() -> Config.updateRoot(root -> {
+            org.json.JSONObject defaults = Config.defaultObj(root);
+            defaults.put("showUser", u);
+            defaults.put("showSystem", s);
+            defaults.put("showVR", v);
+            defaults.put("showModified", m);
+            root.put("default", defaults);
+        }));
     }
 
     @Override
@@ -204,6 +207,7 @@ public class AppListActivity extends AppCompatActivity {
                     executor.execute(() -> {
                         String result = Config.applyBatchJson(String.valueOf(input.getText()));
                         handler.post(() -> {
+                            if (destroyed || isFinishing()) return;
                             android.widget.Toast.makeText(this, result, android.widget.Toast.LENGTH_LONG).show();
                             reload();
                         });
@@ -247,6 +251,18 @@ public class AppListActivity extends AppCompatActivity {
         super.onBackPressed();
     }
 
+    private void renderFilterButtons(View actionView) {
+        if (actionView == null) return;
+        updateFilterButtonStyle((MaterialButton) actionView.findViewById(R.id.btn_filter_modified), showModified);
+        updateFilterButtonStyle((MaterialButton) actionView.findViewById(R.id.btn_filter_user), showUser);
+        updateFilterButtonStyle((MaterialButton) actionView.findViewById(R.id.btn_filter_system), showSystem);
+        updateFilterButtonStyle((MaterialButton) actionView.findViewById(R.id.btn_filter_vr), showVR);
+    }
+
+    private boolean isAlive(long generation) {
+        return !destroyed && !isFinishing() && generation == reloadGeneration.get();
+    }
+
     private void updateFilterButtonStyle(MaterialButton btn, boolean active) {
         if (btn == null) return;
         if (active) {
@@ -266,13 +282,22 @@ public class AppListActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        destroyed = true;
+        reloadGeneration.incrementAndGet();
+        if (reloadFuture != null) reloadFuture.cancel(true);
+        handler.removeCallbacksAndMessages(null);
+        executor.shutdownNow();
+        configExecutor.shutdownNow();
         super.onDestroy();
-        executor.shutdown();
     }
 
     void reload() {
+        if (destroyed) return;
+        final long generation = reloadGeneration.incrementAndGet();
         final boolean u = showUser, s = showSystem, v = showVR, m = showModified;
-        executor.execute(() -> {
+        if (reloadFuture != null) reloadFuture.cancel(true);
+        reloadFuture = executor.submit(() -> {
+            if (!isAlive(generation)) return;
             Config.GlobalCfg currentGlob = Config.getGlobal();
             List<Config.AppEntry> result = Config.listApps(this, u, s, v, m, currentGlob);
 
@@ -285,6 +310,7 @@ public class AppListActivity extends AppCompatActivity {
             });
 
             handler.post(() -> {
+                if (!isAlive(generation)) return;
                 glob = currentGlob;
                 allApps = result;
                 android.util.Log.i("ResFixGUI", "listApps returned " + allApps.size()
@@ -295,7 +321,7 @@ public class AppListActivity extends AppCompatActivity {
     }
 
     void filter(String query) {
-        if (allApps == null) return;
+        if (destroyed || allApps == null) return;
         List<Config.AppEntry> filtered;
         if (android.text.TextUtils.isEmpty(query)) {
             filtered = allApps;
@@ -403,7 +429,8 @@ public class AppListActivity extends AppCompatActivity {
                         final Drawable icon = pm.getApplicationIcon(pkgName);
                         iconCache.put(pkgName, icon);
                         handler.post(() -> {
-                            if (pkgName.equals(h.tag)) {
+                            if (!destroyed && !isFinishing() && pkgName.equals(h.tag)
+                                    && h.itemView.getWindowToken() != null) {
                                 h.icon.setImageDrawable(icon);
                             }
                         });

@@ -219,13 +219,27 @@ public class ResFix implements IXposedHookLoadPackage {
         }
     }
 
+    static boolean nativeDockMode(String pkg, Object appRecord) {
+        try {
+            Context context = systemContext();
+            if (context == null || pkg == null) return false;
+            android.content.pm.PackageManager pm = context.getPackageManager();
+            android.content.pm.ApplicationInfo ai = pm.getApplicationInfo(
+                    pkg, android.content.pm.PackageManager.GET_META_DATA);
+            return Config.isAppDockMode(pm, pkg, ai);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     /** Returns null when this AppRecord should not be resized. */
     static Cfg decide(String pkg, Object appRecord) {
         if ("com.picoxr.resfix".equals(pkg)) return null;
         Boolean dock = dockOverride(pkg);
-        Cfg app = appConfig(pkg, Boolean.TRUE.equals(dock));
+        boolean effectiveDock = dock != null ? dock : nativeDockMode(pkg, appRecord);
+        Cfg app = appConfig(pkg, effectiveDock);
         if (app != null) return app;
-        Cfg global = defaultConfig(Boolean.TRUE.equals(dock));
+        Cfg global = defaultConfig(effectiveDock);
         if (!ConfigSchema.isResolutionValid(global.w, global.h)) return null;
         Boolean system = isSystemApp(appRecord);
         if (system == null) return null;

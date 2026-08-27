@@ -123,6 +123,25 @@ public final class Config {
         }
     }
 
+    public interface RootMutation {
+        void apply(JSONObject root) throws Exception;
+    }
+
+    /** Performs read, mutation, validation and write as one serialized transaction. */
+    public static synchronized boolean updateRoot(RootMutation mutation) {
+        if (mutation == null) return false;
+        JSONObject root = readRootForWrite();
+        if (root == null) return false;
+        try {
+            mutation.apply(root);
+            ConfigSchema.validate(root);
+            return writeRoot(root);
+        } catch (Throwable t) {
+            Log.w("PicoResFix", "configuration update rejected", t);
+            return false;
+        }
+    }
+
     public static GlobalCfg getGlobal() {
         GlobalCfg g = new GlobalCfg();
         try {
@@ -152,22 +171,33 @@ public final class Config {
             PackageManager pm = ctx.getPackageManager();
             List<ApplicationInfo> all = pm.getInstalledApplications(PackageManager.GET_META_DATA);
             List<ApplicationInfo> sorted = new java.util.ArrayList<>(all);
+            final java.util.Map<String, String> labels = new java.util.HashMap<>();
+            for (ApplicationInfo ai : sorted) {
+                String pkg = ai == null ? null : ai.packageName;
+                labels.put(pkg, safeLabel(pm, ai, pkg));
+            }
             java.util.Collections.sort(sorted,
-                    (a, b) -> String.valueOf(a.loadLabel(pm)).compareToIgnoreCase(String.valueOf(b.loadLabel(pm))));
+                    (a, b) -> labels.get(a == null ? null : a.packageName)
+                            .compareToIgnoreCase(labels.get(b == null ? null : b.packageName)));
             JSONObject appsJ = appsObj(readRoot());
             for (ApplicationInfo ai : sorted) {
+                if (ai == null) continue;
                 String pkg = ai.packageName;
                 if (pkg == null || pkg.equals(ctx.getPackageName())) continue; // hide ourselves
 
-                // Filter out apps that don't have any activities
                 try {
                     PackageInfo pi = pm.getPackageInfo(pkg, PackageManager.GET_ACTIVITIES);
                     if (pi.activities == null || pi.activities.length == 0) continue;
-                } catch (PackageManager.NameNotFoundException ignored) {
+                } catch (Throwable ignored) {
                     continue;
                 }
 
-                boolean isVR = ai.metaData != null && "vr".equals(ai.metaData.getString("pvr.app.type"));
+                boolean isVR;
+                try {
+                    isVR = ai.metaData != null && "vr".equals(ai.metaData.getString("pvr.app.type"));
+                } catch (Throwable ignored) {
+                    isVR = false;
+                }
                 boolean isDock = isAppDockMode(pm, pkg, ai);
                 boolean isSystem = (ai.flags & (ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0;
 
@@ -215,8 +245,7 @@ public final class Config {
 
                 AppEntry e = new AppEntry();
                 e.pkg = pkg;
-                CharSequence lb = ai.loadLabel(pm);
-                e.label = (lb != null) ? lb : pkg;
+                e.label = labels.get(pkg);
                 e.isSystem = isSystem;
                 e.isDock = overDock;
                 e.hasOverride = hasOverride;
@@ -236,6 +265,15 @@ public final class Config {
             }
         } catch (Throwable ignored) {}
         return out;
+    }
+
+    private static String safeLabel(PackageManager pm, ApplicationInfo ai, String fallback) {
+        try {
+            CharSequence label = ai == null ? null : ai.loadLabel(pm);
+            return label == null ? String.valueOf(fallback) : String.valueOf(label);
+        } catch (Throwable ignored) {
+            return String.valueOf(fallback);
+        }
     }
 
     public static boolean isAppDockMode(PackageManager pm, String pkg, ApplicationInfo ai) {
@@ -329,38 +367,29 @@ public final class Config {
         if (raw == null) return "No input";
         try {
             JSONObject input = ConfigSchema.parse(raw.trim());
-            JSONObject root = readRootForWrite();
-            if (root == null) return "Unable to read existing configuration";
-            JSONObject apps = ensureAppsObj(root);
-
-            int count = 0;
-
-            if (input.has("default")) {
-                root.put("default", input.getJSONObject("default"));
-                count++;
-            }
-
-            JSONObject batchApps = input.optJSONObject("apps");
-            if (batchApps != null) {
-                java.util.Iterator<String> keys = batchApps.keys();
-                while (keys.hasNext()) {
-                    String pkg = keys.next();
-                    if ("com.picoxr.resfix".equals(pkg)) continue;
-                    JSONObject entry = batchApps.optJSONObject(pkg);
-                    if (entry == null) continue;
-                    apps.put(pkg, entry);
-                    count++;
+            final int[] count = {0};
+            boolean ok = updateRoot(root -> {
+                JSONObject apps = ensureAppsObj(root);
+                if (input.has("default")) {
+                    root.put("default", input.getJSONObject("default"));
+                    count[0]++;
                 }
-            }
-
-            if (count <= 0) return "No batch entries";
-            root.put("apps", apps);
-            try {
-                ConfigSchema.validate(root);
-            } catch (Throwable t) {
-                return "Invalid configuration: " + t.getMessage();
-            }
-            return writeRoot(root) ? "Imported " + count + " item(s)" : "Write failed";
+                JSONObject batchApps = input.optJSONObject("apps");
+                if (batchApps != null) {
+                    java.util.Iterator<String> keys = batchApps.keys();
+                    while (keys.hasNext()) {
+                        String pkg = keys.next();
+                        if ("com.picoxr.resfix".equals(pkg)) continue;
+                        JSONObject entry = batchApps.optJSONObject(pkg);
+                        if (entry == null) continue;
+                        apps.put(pkg, entry);
+                        count[0]++;
+                    }
+                }
+                if (count[0] <= 0) throw new IllegalArgumentException("No batch entries");
+                root.put("apps", apps);
+            });
+            return ok ? "Imported " + count[0] + " item(s)" : "Write failed";
         } catch (Throwable t) {
             return "Import failed: " + t.getClass().getSimpleName();
         }
@@ -371,26 +400,25 @@ public final class Config {
         if (packages == null || packages.isEmpty() || !ConfigSchema.isResolutionValid(w, h)
                 || (density > 0 && !ConfigSchema.isDensityValid(density))) return false;
         try {
-            JSONObject root = readRootForWrite();
-            if (root == null) return false;
-            JSONObject apps = ensureAppsObj(root);
-            int changed = 0;
-            for (String pkg : packages) {
-                if (pkg == null || pkg.isEmpty() || "com.picoxr.resfix".equals(pkg)) continue;
-                JSONObject entry = apps.optJSONObject(pkg);
-                if (entry == null) entry = new JSONObject();
-                entry.put("disabled", !enabled);
-                entry.put("dock", dock);
-                String prefix = dock ? "near_" : "";
-                entry.put(prefix + "w", w);
-                entry.put(prefix + "h", h);
-                if (density > 0) entry.put(prefix + "density", density);
-                apps.put(pkg, entry);
-                changed++;
-            }
-            if (changed == 0) return false;
-            root.put("apps", apps);
-            return writeRoot(root);
+            final int[] changed = {0};
+            return updateRoot(root -> {
+                JSONObject apps = ensureAppsObj(root);
+                for (String pkg : packages) {
+                    if (pkg == null || pkg.isEmpty() || "com.picoxr.resfix".equals(pkg)) continue;
+                    JSONObject entry = apps.optJSONObject(pkg);
+                    if (entry == null) entry = new JSONObject();
+                    entry.put("disabled", !enabled);
+                    entry.put("dock", dock);
+                    String prefix = dock ? "near_" : "";
+                    entry.put(prefix + "w", w);
+                    entry.put(prefix + "h", h);
+                    if (density > 0) entry.put(prefix + "density", density);
+                    apps.put(pkg, entry);
+                    changed[0]++;
+                }
+                if (changed[0] == 0) throw new IllegalArgumentException("No packages");
+                root.put("apps", apps);
+            });
         } catch (Throwable t) {
             return false;
         }
