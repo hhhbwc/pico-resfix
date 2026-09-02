@@ -5,8 +5,8 @@
     void handleLoadPackage(de.robv.android.xposed.callbacks.XC_LoadPackage$LoadPackageParam);
 }
 
-# ResApp (settings Activity) is referenced from the manifest.
--keep class com.picoxr.resfix.ResApp { *; }
+# Keep the launcher Activity referenced by the manifest.
+-keep class com.picoxr.resfix.AppListActivity { *; }
 
 # Xposed API is compileOnly (provided at runtime by LSPosed/Vector).
 # We must NOT keep nor package these classes — Vector rejects modules that bundle them.
