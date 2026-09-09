@@ -11,11 +11,21 @@ public final class ConfigSchema {
     public static final int MAX_CONFIG_BYTES = 256 * 1024;
     public static final int MAX_APP_ENTRIES = 500;
     public static final int MIN_WIDTH = 320;
-    public static final int MAX_WIDTH = 7680;
+    public static final int MAX_WIDTH = 3840;
     public static final int MIN_HEIGHT = 240;
-    public static final int MAX_HEIGHT = 4320;
+    public static final int MAX_HEIGHT = 2162;
     public static final int MIN_DENSITY = 72;
     public static final int MAX_DENSITY = 1000;
+
+    /**
+     * Maximum total pixels an app may request. PICO 4 (A8110) renders about 7.2MP per
+     * eye pair; anything beyond ~1.7x that cannot reliably be allocated, and the
+     * display server then downgrades the buffer silently while still reporting
+     * success. That mismatch between requested and actual buffer size is what shows
+     * up as tearing lines, so cap it rather than accepting a request the hardware
+     * will quietly ignore.
+     */
+    public static final long MAX_PIXELS = 12_000_000L;
 
     private ConfigSchema() {}
 
@@ -46,8 +56,9 @@ public final class ConfigSchema {
     }
 
     public static boolean isResolutionValid(int width, int height) {
-        return width >= MIN_WIDTH && width <= MAX_WIDTH
-                && height >= MIN_HEIGHT && height <= MAX_HEIGHT;
+        if (width < MIN_WIDTH || width > MAX_WIDTH
+                || height < MIN_HEIGHT || height > MAX_HEIGHT) return false;
+        return (long) width * height <= MAX_PIXELS;
     }
 
     public static boolean isDensityValid(int density) {

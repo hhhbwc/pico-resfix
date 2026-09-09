@@ -7,7 +7,7 @@
 
 Реализовано с помощью инъекции в `com.picovr.systemext` через **Zygisk Vector (совместимый с LSPosed фреймворк)** — замена системных APK не требуется.
 
-**Текущий выпуск: v1.16**
+**Текущий выпуск: v1.4**
 
 ---
 
@@ -105,4 +105,4 @@ PICO 4 (Android 10, API 29)
 
 ## 7. Версионирование
 
-`versionName` Android, Git tag, название GitHub Release и имя APK используют один номер версии. Например, v1.16 публикуется с тегом `1.16` и файлом `Pico-ResFix-v1.16.apk`.
+`versionName` Android, Git tag, название GitHub Release и имя APK используют один номер версии. Например, v1.4 публикуется с тегом `1.4` и файлом `Pico-ResFix-v1.4.apk`.

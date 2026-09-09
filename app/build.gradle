@@ -10,8 +10,8 @@ android {
         applicationId "com.picoxr.resfix"
         minSdk 29
         targetSdk 34
-        versionCode 18
-        versionName "1.17"
+        versionCode 19
+        versionName "1.4"
     }
 
     buildTypes {

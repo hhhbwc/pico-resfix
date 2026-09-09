@@ -54,6 +54,8 @@ public class ConfigSchemaTest {
         assertTrue(ConfigSchema.isResolutionValid(ConfigSchema.MAX_WIDTH, ConfigSchema.MAX_HEIGHT));
         assertFalse(ConfigSchema.isResolutionValid(ConfigSchema.MIN_WIDTH - 1, ConfigSchema.MIN_HEIGHT));
         assertFalse(ConfigSchema.isResolutionValid(ConfigSchema.MAX_WIDTH + 1, ConfigSchema.MAX_HEIGHT));
+        assertFalse(ConfigSchema.isResolutionValid(ConfigSchema.MIN_WIDTH, ConfigSchema.MIN_HEIGHT - 1));
+        assertFalse(ConfigSchema.isResolutionValid(ConfigSchema.MIN_WIDTH, ConfigSchema.MAX_HEIGHT + 1));
         assertTrue(ConfigSchema.isDensityValid(ConfigSchema.MIN_DENSITY));
         assertTrue(ConfigSchema.isDensityValid(ConfigSchema.MAX_DENSITY));
         assertFalse(ConfigSchema.isDensityValid(ConfigSchema.MIN_DENSITY - 1));

@@ -306,7 +306,9 @@ public class AppDetailActivity extends AppCompatActivity {
         int defH = isDockInEditor ? glob.dockHeight : glob.floatingHeight;
         
         int w = parseInt(etW, defW), h = parseInt(etH, defH);
-        if (w < 320 || h < 240) { Toast.makeText(this,R.string.invalid_res,Toast.LENGTH_SHORT).show(); return; }
+        if (!ConfigSchema.isResolutionValid(w, h)) {
+            Toast.makeText(this,R.string.invalid_res,Toast.LENGTH_SHORT).show(); return;
+        }
         try {
             if (isBatchMode()) {
                 String densityText = etDensity.getText() != null ? etDensity.getText().toString().trim() : "";

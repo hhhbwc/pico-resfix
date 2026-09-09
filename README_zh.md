@@ -7,7 +7,7 @@
 
 用 **Zygisk Vector (LSPosed 兼容框架)** 注入 `com.picovr.systemext` 实现 —— 无需替换系统 APK。
 
-**当前版本：v1.17**
+**当前版本：v1.4**
 
 ---
 
@@ -107,4 +107,4 @@ PICO 4 (Android 10, API 29)
 
 ## 七、版本命名
 
-Android 的 `versionName`、Git tag、GitHub Release 标题和 Release APK 文件名统一使用同一版本号。例如 v1.16 对应 tag `1.16` 和 `Pico-ResFix-v1.16.apk`。
+Android 的 `versionName`、Git tag、GitHub Release 标题和 Release APK 文件名统一使用同一版本号。例如 v1.4 对应 tag `1.4` 和 `Pico-ResFix-v1.4.apk`。

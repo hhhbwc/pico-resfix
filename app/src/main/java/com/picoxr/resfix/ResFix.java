@@ -268,21 +268,102 @@ public class ResFix implements IXposedHookLoadPackage {
                             if (pkg == null) return;
                             Cfg cfg = decide(pkg, param.thisObject);
                             if (cfg == null) return;
-                            param.args[1] = cfg.w;
-                            param.args[2] = cfg.h;
-                            if (cfg.density > 0) param.args[3] = cfg.density;
-                            try {
-                                XposedHelpers.setIntField(param.thisObject, "mWidth", cfg.w);
-                                XposedHelpers.setIntField(param.thisObject, "mHeight", cfg.h);
-                                if (cfg.density > 0) XposedHelpers.setIntField(param.thisObject, "mDensity", cfg.density);
-                            } catch (Throwable t) {
-                                log("failed to update AppContainer dimensions", t);
-                            }
+
+                            int w = cfg.w, h = cfg.h;
+                            int density = cfg.density > 0 ? cfg.density : currentDensity(param.thisObject);
+                            int flags = (int) param.args[4];
+                            param.args[1] = w;
+                            param.args[2] = h;
+                            param.args[3] = density;
+
+                            // createVirtualDisplay(String,int,int,int,int) does NOT write
+                            // mWidth/mHeight - it only registers the display. Those fields
+                            // are used later by acquireSurface to decide the buffer size, so
+                            // they must be set from the same values that were passed down,
+                            // or the buffer and the SurfaceFlinger crop disagree.
+                            setInt(param.thisObject, "mWidth", w, true);
+                            setInt(param.thisObject, "mHeight", h, true);
+                            if (cfg.density > 0) setInt(param.thisObject, "mDensity", density, false);
+
+                            XposedBridge.log(TAG + ": " + pkg + " " + w + "x" + h + "@" + density
+                                    + " (flags=" + flags + ")");
                         }
                     });
             XposedBridge.log(TAG + ": installed resolution hook");
         } catch (Throwable t) {
             log("failed to install resolution hook", t);
+        }
+        installAppRecordFix(lp);
+    }
+
+    /**
+     * PICO's AppRecord unconditionally adds 2 to the app's native width and height
+     * (this.mWidth += 2; this.mHeight += 2;) before calling createVirtualDisplay.
+     * That "+2" is PICO's own padding, not part of the resolution the user asked for,
+     * and it leaves the allocated buffer 2 pixels wider than the declared size.
+     * SurfaceFlinger then reports e.g. "1278 (1280)" and the resulting 1-pixel
+     * horizontal offset between the buffer and the compositor crop is what shows
+     * up as jumping lines on non-native resolutions such as 2560x1440.
+     *
+     * Pin the dimension fields so the values reach createVirtualDisplay without
+     * the +2. Without this the user's requested resolution is only ever honoured
+     * within a +/-2 px band, which is enough to tear at supersampled sizes.
+     */
+    private static void installAppRecordFix(XC_LoadPackage.LoadPackageParam lp) {
+        try {
+            Class<?> appRecord = XposedHelpers.findClass(
+                    "com.bytedance.nativeshell.appmanager.AppRecord", lp.classLoader);
+            hook("AppRecord.prepareAppData", () -> XposedHelpers.findAndHookMethod(
+                    appRecord, "prepareAppData", "android.content.Context", new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                Object container = param.thisObject;
+                                String pkg = pkgFromThis(container);
+                                if (pkg == null) return;
+                                Cfg cfg = decide(pkg, container);
+                                if (cfg == null) return;
+                                setInt(container, "mWidth", cfg.w, false);
+                                setInt(container, "mHeight", cfg.h, false);
+                                XposedBridge.log(TAG + ": AppRecord " + pkg + " pinned to "
+                                        + cfg.w + "x" + cfg.h);
+                            } catch (Throwable t) {
+                                log("AppRecord dimension fix failed", t);
+                            }
+                        }
+                    }));
+        } catch (Throwable t) {
+            log("failed to install AppRecord dimension fix", t);
+        }
+    }
+
+    /** AppContainer.mDensity defaults to 200; callers that did not pass one expect that. */
+    private static int currentDensity(Object container) {
+        try {
+            return XposedHelpers.getIntField(container, "mDensity");
+        } catch (Throwable t) {
+            return 200;
+        }
+    }
+
+    /**
+     * Sets an int field and logs if the write did not take. mWidth/mHeight/mDensity are
+     * protected non-final on AppContainer, so these should always succeed; if one does not,
+     * the buffer size and the consumer's crop disagree, which is what produces tearing.
+     */
+    private static void setInt(Object obj, String field, int value, boolean required) {
+        try {
+            XposedHelpers.setIntField(obj, field, value);
+            int read = XposedHelpers.getIntField(obj, field);
+            if (read != value) {
+                log("field " + field + " read back as " + read + " (wrote " + value + ")", null);
+            }
+        } catch (Throwable t) {
+            if (required) {
+                log("failed to set required field " + field + " = " + value + ": " + t, null);
+            } else {
+                log("optional field " + field + " not set: " + t, null);
+            }
         }
     }
 

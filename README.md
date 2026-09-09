@@ -7,7 +7,7 @@ Allows **per-app configuration** of 2D virtual display resolution (no longer loc
 
 Implemented by injecting into `com.picovr.systemext` using **Zygisk Vector (LSPosed compatible framework)** — no system APK replacement required.
 
-**Current release: v1.16**
+**Current release: v1.4**
 
 ---
 
@@ -130,4 +130,4 @@ Requirements: JDK 17 + Android SDK (platform 34, build-tools 34). Use the checke
 
 ## 7. Versioning
 
-Android `versionName`, Git tag, GitHub Release title, and release APK filename use the same version number. For example, v1.16 is published as tag `1.16` with `Pico-ResFix-v1.16.apk`.
+Android `versionName`, Git tag, GitHub Release title, and release APK filename use the same version number. For example, v1.4 is published as tag `1.4` with `Pico-ResFix-v1.4.apk`.
