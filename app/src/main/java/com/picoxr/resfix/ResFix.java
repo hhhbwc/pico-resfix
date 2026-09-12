@@ -1,6 +1,8 @@
 package com.picoxr.resfix;
 
 import android.content.Context;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.provider.Settings;
 
 import org.json.JSONObject;
@@ -8,6 +10,7 @@ import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -50,6 +53,7 @@ public class ResFix implements IXposedHookLoadPackage {
     }
 
     private static volatile Snapshot snapshot;
+    private static final ThreadLocal<String> launchingPackage = new ThreadLocal<>();
 
     private static Context systemContext() {
         try {
@@ -175,7 +179,6 @@ public class ResFix implements IXposedHookLoadPackage {
         }
     }
 
-    /** null preserves the target APK's native PICO metadata behavior. */
     static Boolean dockOverride(String pkg) {
         if (pkg == null) return null;
         JSONObject apps = configSnapshot().root.optJSONObject("apps");
@@ -186,7 +189,7 @@ public class ResFix implements IXposedHookLoadPackage {
     static Boolean isSystemApp(Object container) {
         if (container == null) return null;
         try {
-            java.lang.reflect.Method method = container.getClass().getMethod("isSystemApp");
+            Method method = container.getClass().getMethod("isSystemApp");
             method.setAccessible(true);
             Object result = method.invoke(container);
             return result instanceof Boolean ? (Boolean) result : null;
@@ -210,22 +213,36 @@ public class ResFix implements IXposedHookLoadPackage {
     }
 
     static String pkgFromThis(Object object) {
+        if (object == null) return null;
         try {
+            // 1. Try getPackageName() method
+            try {
+                Method m = object.getClass().getMethod("getPackageName");
+                m.setAccessible(true);
+                String pkg = (String) m.invoke(object);
+                if (pkg != null && !pkg.isEmpty()) return pkg;
+            } catch (Throwable ignored) {}
+
+            // 2. Try mPackageName field
+            String pkgField = fieldString(object, "mPackageName");
+            if (pkgField != null && !pkgField.isEmpty()) return pkgField;
+
+            // 3. Fallback to mComponentName
             Object componentName = XposedHelpers.getObjectField(object, "mComponentName");
-            return componentName == null ? null : (String) componentName.getClass()
-                    .getMethod("getPackageName").invoke(componentName);
-        } catch (Throwable t) {
-            return null;
-        }
+            if (componentName != null) {
+                return (String) componentName.getClass().getMethod("getPackageName").invoke(componentName);
+            }
+        } catch (Throwable ignored) {}
+        return null;
     }
 
     static boolean nativeDockMode(String pkg, Object appRecord) {
         try {
             Context context = systemContext();
             if (context == null || pkg == null) return false;
-            android.content.pm.PackageManager pm = context.getPackageManager();
-            android.content.pm.ApplicationInfo ai = pm.getApplicationInfo(
-                    pkg, android.content.pm.PackageManager.GET_META_DATA);
+            PackageManager pm = context.getPackageManager();
+            ApplicationInfo ai = pm.getApplicationInfo(
+                    pkg, PackageManager.GET_META_DATA);
             return Config.isAppDockMode(pm, pkg, ai);
         } catch (Throwable ignored) {
             return false;
@@ -259,85 +276,80 @@ public class ResFix implements IXposedHookLoadPackage {
         try {
             Class<?> appContainer = XposedHelpers.findClass(
                     "com.bytedance.nativeshell.appmanager.AppContainer", lp.classLoader);
+            // Signature: (String name, int w, int h, int density, int flags)
             XposedHelpers.findAndHookMethod(appContainer, "createVirtualDisplay",
                     String.class, int.class, int.class, int.class, int.class, new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
-                            String name = (String) param.args[0];
-                            String pkg = pkgFromName(name);
-                            if (pkg == null) return;
-                            Cfg cfg = decide(pkg, param.thisObject);
-                            if (cfg == null) return;
+                            try {
+                                String name = (String) param.args[0];
+                                String pkg = pkgFromName(name);
+                                if (pkg == null) return;
+                                Cfg cfg = decide(pkg, param.thisObject);
+                                if (cfg == null) return;
 
-                            int w = cfg.w, h = cfg.h;
-                            int density = cfg.density > 0 ? cfg.density : currentDensity(param.thisObject);
-                            int flags = (int) param.args[4];
-                            param.args[1] = w;
-                            param.args[2] = h;
-                            param.args[3] = density;
+                                int targetW = cfg.w, targetH = cfg.h;
+                                int targetDensity = cfg.density > 0 ? cfg.density : currentDensity(param.thisObject);
+                                param.args[1] = targetW;
+                                param.args[2] = targetH;
+                                param.args[3] = targetDensity;
 
-                            // createVirtualDisplay(String,int,int,int,int) does NOT write
-                            // mWidth/mHeight - it only registers the display. Those fields
-                            // are used later by acquireSurface to decide the buffer size, so
-                            // they must be set from the same values that were passed down,
-                            // or the buffer and the SurfaceFlinger crop disagree.
-                            setInt(param.thisObject, "mWidth", w, true);
-                            setInt(param.thisObject, "mHeight", h, true);
-                            if (cfg.density > 0) setInt(param.thisObject, "mDensity", density, false);
+                                setInt(param.thisObject, "mWidth", targetW, true);
+                                setInt(param.thisObject, "mHeight", targetH, true);
+                                if (cfg.density > 0) setInt(param.thisObject, "mDensity", targetDensity, false);
 
-                            XposedBridge.log(TAG + ": " + pkg + " " + w + "x" + h + "@" + density
-                                    + " (flags=" + flags + ")");
+                                XposedBridge.log(TAG + ": route " + pkg + " -> " + targetW + "x" + targetH + "@" + targetDensity);
+                            } catch (Throwable t) {
+                                log("createVirtualDisplay hook failed", t);
+                            }
                         }
                     });
-            XposedBridge.log(TAG + ": installed resolution hook");
         } catch (Throwable t) {
             log("failed to install resolution hook", t);
         }
         installAppRecordFix(lp);
     }
 
-    /**
-     * PICO's AppRecord unconditionally adds 2 to the app's native width and height
-     * (this.mWidth += 2; this.mHeight += 2;) before calling createVirtualDisplay.
-     * That "+2" is PICO's own padding, not part of the resolution the user asked for,
-     * and it leaves the allocated buffer 2 pixels wider than the declared size.
-     * SurfaceFlinger then reports e.g. "1278 (1280)" and the resulting 1-pixel
-     * horizontal offset between the buffer and the compositor crop is what shows
-     * up as jumping lines on non-native resolutions such as 2560x1440.
-     *
-     * Pin the dimension fields so the values reach createVirtualDisplay without
-     * the +2. Without this the user's requested resolution is only ever honoured
-     * within a +/-2 px band, which is enough to tear at supersampled sizes.
-     */
     private static void installAppRecordFix(XC_LoadPackage.LoadPackageParam lp) {
         try {
             Class<?> appRecord = XposedHelpers.findClass(
                     "com.bytedance.nativeshell.appmanager.AppRecord", lp.classLoader);
-            hook("AppRecord.prepareAppData", () -> XposedHelpers.findAndHookMethod(
-                    appRecord, "prepareAppData", "android.content.Context", new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            try {
-                                Object container = param.thisObject;
-                                String pkg = pkgFromThis(container);
-                                if (pkg == null) return;
-                                Cfg cfg = decide(pkg, container);
-                                if (cfg == null) return;
-                                setInt(container, "mWidth", cfg.w, false);
-                                setInt(container, "mHeight", cfg.h, false);
-                                XposedBridge.log(TAG + ": AppRecord " + pkg + " pinned to "
-                                        + cfg.w + "x" + cfg.h);
-                            } catch (Throwable t) {
-                                log("AppRecord dimension fix failed", t);
-                            }
+            XposedHelpers.findAndHookMethod(appRecord, "prepareAppData", Context.class, new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    String pkg = pkgFromThis(param.thisObject);
+                    if (pkg != null) launchingPackage.set(pkg);
+                }
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        Object container = param.thisObject;
+                        String pkg = pkgFromThis(container);
+                        if (pkg == null) pkg = launchingPackage.get();
+                        if (pkg == null) return;
+
+                        Cfg cfg = decide(pkg, container);
+                        if (cfg != null) {
+                            setInt(container, "mWidth", cfg.w, false);
+                            setInt(container, "mHeight", cfg.h, false);
                         }
-                    }));
+
+                        Boolean dock = dockOverride(pkg);
+                        if (dock != null) {
+                            XposedHelpers.setObjectField(container, "mAppResizeable", dock);
+                            trySetIntField(container, "mWindowType", dock ? 2002 : 3002);
+                            trySetIntField(container, "mType", dock ? 2002 : 3002);
+                        }
+                    } catch (Throwable t) {
+                        log("AppRecord.prepareAppData hook failed", t);
+                    } finally {
+                        launchingPackage.remove();
+                    }
+                }
+            });
         } catch (Throwable t) {
-            log("failed to install AppRecord dimension fix", t);
+            log("failed to install AppRecord fix", t);
         }
     }
 
-    /** AppContainer.mDensity defaults to 200; callers that did not pass one expect that. */
     private static int currentDensity(Object container) {
         try {
             return XposedHelpers.getIntField(container, "mDensity");
@@ -346,108 +358,152 @@ public class ResFix implements IXposedHookLoadPackage {
         }
     }
 
-    /**
-     * Sets an int field and logs if the write did not take. mWidth/mHeight/mDensity are
-     * protected non-final on AppContainer, so these should always succeed; if one does not,
-     * the buffer size and the consumer's crop disagree, which is what produces tearing.
-     */
     private static void setInt(Object obj, String field, int value, boolean required) {
         try {
             XposedHelpers.setIntField(obj, field, value);
-            int read = XposedHelpers.getIntField(obj, field);
-            if (read != value) {
-                log("field " + field + " read back as " + read + " (wrote " + value + ")", null);
-            }
         } catch (Throwable t) {
-            if (required) {
-                log("failed to set required field " + field + " = " + value + ": " + t, null);
-            } else {
-                log("optional field " + field + " not set: " + t, null);
-            }
+            if (required) log("failed to set required field " + field, t);
         }
     }
 
     private static void installDockHooks(XC_LoadPackage.LoadPackageParam lp) {
         try {
             Class<?> activityInfo = XposedHelpers.findClass("android.content.pm.ActivityInfo", lp.classLoader);
+            Class<?> applicationInfo = XposedHelpers.findClass("android.content.pm.ApplicationInfo", lp.classLoader);
             Class<?> appManagerUtils = XposedHelpers.findClass(
                     "com.bytedance.nativeshell.appmanager.AppManagerUtils", lp.classLoader);
             Class<?> appRecord = XposedHelpers.findClass(
                     "com.bytedance.nativeshell.appmanager.AppRecord", lp.classLoader);
             Class<?> appContainer = XposedHelpers.findClass(
                     "com.bytedance.nativeshell.appmanager.AppContainer", lp.classLoader);
+
             XC_MethodHook windowTypeHook = new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
                     try {
-                        String pkg = fieldString(param.args[0], "packageName");
-                        Boolean dock = dockOverride(pkg);
-                        if (dock != null && !"com.picoxr.resfix".equals(pkg)) {
-                            param.setResult(dock ? 2002 : 3002);
-                            XposedBridge.log(TAG + ": route " + pkg + " -> " + (dock ? 2002 : 3002));
+                        String pkg = pkgFromThis(param.thisObject);
+                        if (pkg == null && param.args.length > 0) {
+                            Object arg0 = param.args[0];
+                            if (arg0 instanceof String) {
+                                String s = (String) arg0;
+                                if (!"far".equals(s) && !"near".equals(s)) pkg = s;
+                            } else if (arg0 != null) {
+                                pkg = fieldString(arg0, "packageName");
+                            }
+                        }
+                        if (pkg == null) pkg = launchingPackage.get();
+
+                        if (pkg != null && !"com.picoxr.resfix".equals(pkg)) {
+                            Boolean dock = dockOverride(pkg);
+                            if (dock != null) {
+                                int type = dock ? 2002 : 3002;
+                                param.setResult(type);
+                                XposedBridge.log(TAG + ": route " + pkg + " -> " + type);
+                            }
                         }
                     } catch (Throwable t) {
                         log("window type callback failed", t);
                     }
                 }
             };
-            hook("AppManagerUtils.getWindowType", () -> XposedHelpers.findAndHookMethod(
-                    appManagerUtils, "getWindowType", activityInfo, windowTypeHook));
-            hook("AppRecord.getWindowType", () -> XposedHelpers.findAndHookMethod(
-                    appRecord, "getWindowType", activityInfo, windowTypeHook));
-            hook("AppRecord.prepareAppData", () -> XposedHelpers.findAndHookMethod(
-                    appRecord, "prepareAppData", "android.content.Context", new XC_MethodHook() {
-                        @Override protected void afterHookedMethod(MethodHookParam param) {
-                            try {
-                                Boolean dock = dockOverride(pkgFromThis(param.thisObject));
-                                if (dock != null) XposedHelpers.setObjectField(
-                                        param.thisObject, "mAppResizeable", dock);
-                            } catch (Throwable t) {
-                                log("prepareAppData callback failed", t);
-                            }
+
+            String[] methodsToHook = {"getType", "getWindowType", "convertPositionToWindowType"};
+            for (String methodName : methodsToHook) {
+                XposedBridge.hookAllMethods(appRecord, methodName, windowTypeHook);
+                XposedBridge.hookAllMethods(appManagerUtils, methodName, windowTypeHook);
+            }
+
+            XposedHelpers.findAndHookMethod(appRecord, "obtain", Context.class, activityInfo, new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        String pkg = fieldString(param.args[1], "packageName");
+                        if (pkg != null) launchingPackage.set(pkg);
+                    } catch (Throwable ignored) {}
+                }
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        Object record = param.getResult();
+                        if (record == null) return;
+                        String pkg = launchingPackage.get();
+                        if (pkg == null) pkg = pkgFromThis(record);
+                        Boolean dock = dockOverride(pkg);
+                        if (Boolean.TRUE.equals(dock)) {
+                            trySetIntField(record, "mType", 2002);
+                            trySetIntField(record, "mWindowType", 2002);
+                            XposedHelpers.setObjectField(record, "mAppResizeable", true);
                         }
-                    }));
-            hook("AppRecord.resizeable", () -> XposedHelpers.findAndHookMethod(
-                    appRecord, "resizeable", new XC_MethodHook() {
-                        @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            try {
-                                Boolean dock = dockOverride(pkgFromThis(param.thisObject));
-                                if (dock != null) param.setResult(dock);
-                            } catch (Throwable t) {
-                                log("resizeable callback failed", t);
-                            }
+                    } catch (Throwable t) {
+                        log("AppRecord.obtain hook failed", t);
+                    } finally {
+                        launchingPackage.remove();
+                    }
+                }
+            });
+
+            hookAllConstructors(appRecord, new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        String pkg = pkgFromThis(param.thisObject);
+                        if (pkg == null) pkg = launchingPackage.get();
+                        Boolean dock = dockOverride(pkg);
+                        if (Boolean.TRUE.equals(dock)) {
+                            trySetIntField(param.thisObject, "mType", 2002);
+                            trySetIntField(param.thisObject, "mWindowType", 2002);
+                            XposedHelpers.setObjectField(param.thisObject, "mAppResizeable", true);
                         }
-                    }));
-            hook("AppContainer.updateVisible", () -> XposedHelpers.findAndHookMethod(
-                    appContainer, "updateVisible", boolean.class, int.class, new XC_MethodHook() {
-                        @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            try {
-                                if (param.args.length >= 2 && param.args[0] instanceof Boolean
-                                        && param.args[1] instanceof Integer
-                                        && !(Boolean) param.args[0] && (Integer) param.args[1] == 6
-                                        && Boolean.TRUE.equals(dockOverride(pkgFromThis(param.thisObject)))) {
-                                    param.setResult(false);
-                                }
-                            } catch (Throwable t) {
-                                log("updateVisible callback failed", t);
-                            }
+                    } catch (Throwable t) {
+                        log("AppRecord constructor hook failed", t);
+                    }
+                }
+            });
+
+            XC_MethodHook vrHook = new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    String pkg = fieldString(param.args[0], "packageName");
+                    if (Boolean.TRUE.equals(dockOverride(pkg))) param.setResult(false);
+                }
+            };
+            XposedHelpers.findAndHookMethod(appManagerUtils, "isVrActivity", activityInfo, vrHook);
+            XposedHelpers.findAndHookMethod(appManagerUtils, "isVrApp", applicationInfo, vrHook);
+
+            XposedHelpers.findAndHookMethod(appRecord, "resizeable", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        String pkg = pkgFromThis(param.thisObject);
+                        Boolean dock = dockOverride(pkg);
+                        if (dock != null) param.setResult(dock);
+                    } catch (Throwable t) {
+                        log("resizeable hook failed", t);
+                    }
+                }
+            });
+
+            XposedHelpers.findAndHookMethod(appContainer, "updateVisible", boolean.class, int.class, new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        if (param.args.length >= 2 && !(Boolean) param.args[0] && (Integer) param.args[1] == 6) {
+                            String pkg = pkgFromThis(param.thisObject);
+                            if (Boolean.TRUE.equals(dockOverride(pkg))) param.setResult(false);
                         }
-                    }));
+                    } catch (Throwable t) {
+                        log("updateVisible hook failed", t);
+                    }
+                }
+            });
         } catch (Throwable t) {
             log("failed to resolve dock hook classes", t);
         }
     }
 
-    private interface HookInstall {
-        void install() throws Throwable;
+    private static void hookAllConstructors(Class<?> clazz, XC_MethodHook hook) {
+        try {
+            XposedBridge.class.getMethod("hookAllConstructors", Class.class, XC_MethodHook.class)
+                    .invoke(null, clazz, hook);
+        } catch (Throwable ignored) {}
     }
 
-    private static void hook(String name, HookInstall install) {
-        try {
-            install.install();
-            XposedBridge.log(TAG + ": installed " + name);
-        } catch (Throwable t) {
-            log("failed to install " + name, t);
-        }
+    private static void trySetIntField(Object obj, String field, int value) {
+        try { XposedHelpers.setIntField(obj, field, value); }
+        catch (Throwable ignored) {}
     }
 
     private static void log(String message, Throwable error) {
