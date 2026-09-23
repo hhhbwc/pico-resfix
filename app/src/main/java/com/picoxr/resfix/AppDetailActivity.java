@@ -32,6 +32,8 @@ import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -53,8 +55,22 @@ public class AppDetailActivity extends AppCompatActivity {
     TextInputEditText etW, etH, etDensity;
     MaterialButton btnSave, btnSaveAndApply, btnRemove, btnSwapVal;
     private static final ExecutorService restartExecutor = Executors.newSingleThreadExecutor();
+    /**
+     * Every configuration access goes through {@code su}, and each one may wait out its full
+     * 15 second timeout. Running those on the UI thread freezes the editor (a single save chains
+     * four of them), so all config reads and writes are dispatched here instead.
+     */
+    private static final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private boolean loadingCurrent;
     private boolean preserveDockSelection;
+
+    /** Result of reading the configuration off the UI thread. */
+    private static final class Loaded {
+        Config.GlobalCfg glob;
+        JSONObject target;
+        boolean enabled = true;
+        boolean dock;
+    }
 
     final String[] resFloatArr = {"1280 × 722","1600 × 902","1920 × 1082","2560 × 1442","3840 × 2162"};
     final String[] resDockArr = {"807 × 432","1127 × 752","1447 × 1072","1767 × 1392","2087 × 1712"};
@@ -211,168 +227,233 @@ public class AppDetailActivity extends AppCompatActivity {
 
     void loadCurrent() {
         loadingCurrent = true;
-        Config.GlobalCfg glob = Config.getGlobal();
-        if (isBatchMode()) {
-            etW.setText(String.valueOf(glob.floatingWidth));
-            etH.setText(String.valueOf(glob.floatingHeight));
-            etDensity.setText("");
-            swEnable.setChecked(true);
-            swDock.setChecked(false);
-            loadingCurrent = false;
-            return;
-        }
-        JSONObject root = Config.readRoot();
-        JSONObject target = null;
-        boolean enabled = true;
-        boolean isDock = swDock.isChecked();
-        boolean useSelectedDock = preserveDockSelection;
+        // Grey the fields out until the read returns, otherwise a slow root prompt leaves the
+        // editor accepting input that applyLoaded() is about to overwrite.
+        setInputsEnabled(false);
+        final boolean batch = isBatchMode();
+        final String targetPkg = pkg;
+        final boolean selectedDock = swDock.isChecked();
+        final boolean keepSelectedDock = preserveDockSelection;
         preserveDockSelection = false;
+        ioExecutor.execute(() -> {
+            Loaded loaded = batch ? new Loaded() : readTarget(targetPkg, keepSelectedDock, selectedDock);
+            loaded.glob = Config.getGlobal();
+            runOnUiThread(() -> applyLoaded(loaded, batch));
+        });
+    }
+
+    /** Reads the matching config entry (and its native dock route) on a worker thread. */
+    private Loaded readTarget(String targetPkg, boolean keepSelectedDock, boolean selectedDock) {
+        Loaded loaded = new Loaded();
+        loaded.dock = selectedDock;
         try {
-            if (TextUtils.isEmpty(pkg)) {
-                target = Config.defaultObj(root);
+            JSONObject root = Config.readRoot();
+            if (TextUtils.isEmpty(targetPkg)) {
+                loaded.target = Config.defaultObj(root);
             } else {
                 JSONObject apps = Config.appsObj(root);
-                if (apps.has(pkg)) {
-                    target = apps.getJSONObject(pkg);
-                    enabled = !target.optBoolean("disabled", false);
+                JSONObject entry = apps.optJSONObject(targetPkg);
+                if (entry != null) {
+                    loaded.target = entry;
+                    loaded.enabled = !entry.optBoolean("disabled", false);
                     // Keep legacy resolution-only entries on the APK's native window route.
                     // A missing dock key means no window-mode override, not Floating.
-                    if (!useSelectedDock) {
-                        isDock = target.has("dock")
-                                ? target.optBoolean("dock", false)
-                                : Config.isAppDockMode(getPackageManager(), pkg, null);
+                    if (!keepSelectedDock) {
+                        loaded.dock = entry.has("dock")
+                                ? entry.optBoolean("dock", false)
+                                : Config.isAppDockMode(getPackageManager(), targetPkg, null);
                     }
-                } else if (!useSelectedDock) {
-                    isDock = Config.isAppDockMode(getPackageManager(), pkg, null);
+                } else if (!keepSelectedDock) {
+                    loaded.dock = Config.isAppDockMode(getPackageManager(), targetPkg, null);
                 }
             }
         } catch (Throwable ignored) {}
+        return loaded;
+    }
 
-        if (TextUtils.isEmpty(pkg)) {
-            if (target != null) {
-                if (isDock) {
-                    etW.setText(String.valueOf(target.optInt("near_w", glob.dockWidth)));
-                    etH.setText(String.valueOf(target.optInt("near_h", glob.dockHeight)));
-                    etDensity.setText(target.has("near_density") ? String.valueOf(target.optInt("near_density")) : String.valueOf(glob.dockDensity));
-                } else {
-                    etW.setText(String.valueOf(target.optInt("w", glob.floatingWidth)));
-                    etH.setText(String.valueOf(target.optInt("h", glob.floatingHeight)));
-                    etDensity.setText(target.has("density") ? String.valueOf(target.optInt("density")) : String.valueOf(glob.floatingDensity));
-                }
-            } else {
-                if (isDock) {
-                    etW.setText(String.valueOf(glob.dockWidth));
-                    etH.setText(String.valueOf(glob.dockHeight));
-                    etDensity.setText(String.valueOf(glob.dockDensity));
-                } else {
-                    etW.setText(String.valueOf(glob.floatingWidth));
-                    etH.setText(String.valueOf(glob.floatingHeight));
-                    etDensity.setText(String.valueOf(glob.floatingDensity));
-                }
-            }
-        } else {
-            if (target != null) {
-                String widthKey = isDock ? "near_w" : "w";
-                String heightKey = isDock ? "near_h" : "h";
-                String densityKey = isDock ? "near_density" : "density";
-                if (isDock && (!target.has(widthKey) || !target.has(heightKey))) {
-                    widthKey = "w";
-                    heightKey = "h";
-                    densityKey = "density";
-                }
-                etW.setText(String.valueOf(target.optInt(widthKey, isDock ? glob.dockWidth : glob.floatingWidth)));
-                etH.setText(String.valueOf(target.optInt(heightKey, isDock ? glob.dockHeight : glob.floatingHeight)));
-                etDensity.setText(String.valueOf(target.optInt(densityKey, isDock ? glob.dockDensity : glob.floatingDensity)));
-            } else {
-                etW.setText(String.valueOf(isDock ? glob.dockWidth : glob.floatingWidth));
-                etH.setText(String.valueOf(isDock ? glob.dockHeight : glob.floatingHeight));
-                etDensity.setText(String.valueOf(isDock ? glob.dockDensity : glob.floatingDensity));
-            }
-            swDock.setChecked(isDock);
+    private void applyLoaded(Loaded loaded, boolean batch) {
+        loadingCurrent = true;
+        if (batch) {
+            etW.setText(String.valueOf(loaded.glob.floatingWidth));
+            etH.setText(String.valueOf(loaded.glob.floatingHeight));
+            etDensity.setText("");
+            swEnable.setChecked(true);
+            swDock.setChecked(false);
+            setInputsEnabled(true);
+            loadingCurrent = false;
+            return;
         }
 
-        swEnable.setChecked(enabled);
-        boolean en = enabled || TextUtils.isEmpty(pkg); // default always editable
-        spPreset.setEnabled(en);
-        spPresetSwap.setEnabled(en);
-        etW.setEnabled(en); etH.setEnabled(en); etDensity.setEnabled(en);
+        Config.GlobalCfg glob = loaded.glob;
+        JSONObject target = loaded.target;
+        boolean isDock = loaded.dock;
+        int defW = isDock ? glob.dockWidth : glob.floatingWidth;
+        int defH = isDock ? glob.dockHeight : glob.floatingHeight;
+        boolean isDefault = TextUtils.isEmpty(pkg);
+
+        if (target != null) {
+            String[] keys = ConfigSchema.resolutionKeys(isDock, target);
+            etW.setText(String.valueOf(target.optInt(keys[0], defW)));
+            etH.setText(String.valueOf(target.optInt(keys[1], defH)));
+            // Blank keeps "follow system" intact; prefilling the built-in default would pin
+            // a density the user never chose as soon as the page is saved.
+            etDensity.setText(target.has(keys[2]) ? String.valueOf(target.optInt(keys[2])) : "");
+        } else {
+            etW.setText(String.valueOf(defW));
+            etH.setText(String.valueOf(defH));
+            etDensity.setText("");
+        }
+        if (!isDefault) swDock.setChecked(isDock);
+
+        // Reloading may have swapped which window mode the fields edit; a stale preset selection
+        // would then describe a mode the save no longer targets.
+        spPreset.setSelection(0);
+        spPresetSwap.setSelection(0);
+
+        swEnable.setChecked(loaded.enabled);
+        setInputsEnabled(loaded.enabled || isDefault); // default is always editable
         loadingCurrent = false;
     }
 
+    private void setInputsEnabled(boolean enabled) {
+        spPreset.setEnabled(enabled);
+        spPresetSwap.setEnabled(enabled);
+        etW.setEnabled(enabled);
+        etH.setEnabled(enabled);
+        etDensity.setEnabled(enabled);
+    }
+
     void save(boolean applyAfterSaving) {
-        Config.GlobalCfg glob = Config.getGlobal();
-        boolean isDockInEditor = swDock.isChecked();
-        int defW = isDockInEditor ? glob.dockWidth : glob.floatingWidth;
-        int defH = isDockInEditor ? glob.dockHeight : glob.floatingHeight;
-        
-        int w = parseInt(etW, defW), h = parseInt(etH, defH);
-        if (!ConfigSchema.isResolutionValid(w, h)) {
-            Toast.makeText(this,R.string.invalid_res,Toast.LENGTH_SHORT).show(); return;
-        }
-        try {
-            if (isBatchMode()) {
-                String densityText = etDensity.getText() != null ? etDensity.getText().toString().trim() : "";
-                int density = parseOptionalDensity(densityText);
-                boolean ok = Config.applyBatchSettings(batchPackages, w, h, density,
-                        swEnable.isChecked(), swDock.isChecked());
-                Toast.makeText(this, ok ? getString(R.string.batch_updated, batchPackages.size())
-                        : getString(R.string.write_failed), Toast.LENGTH_LONG).show();
-                if (ok) {
-                    if (applyAfterSaving) restartAppsAsync(batchPackages);
-                    finish();
-                }
+        // Snapshot every widget on the UI thread first; nothing below may touch a view.
+        final boolean batch = isBatchMode();
+        final List<String> targets = batch ? new ArrayList<>(batchPackages) : null;
+        final String targetPkg = pkg;
+        final boolean enable = swEnable.isChecked();
+        final boolean dock = swDock.isChecked();
+        final String widthText = textOf(etW);
+        final String heightText = textOf(etH);
+        final String densityText = textOf(etDensity);
+        setInputsEnabled(false);
+        btnSave.setEnabled(false);
+        btnSaveAndApply.setEnabled(false);
+
+        ioExecutor.execute(() -> {
+            Config.GlobalCfg glob = Config.getGlobal();
+            int defW = dock ? glob.dockWidth : glob.floatingWidth;
+            int defH = dock ? glob.dockHeight : glob.floatingHeight;
+            int w = parseInt(widthText, defW);
+            int h = parseInt(heightText, defH);
+            if (!ConfigSchema.isResolutionValid(w, h)) {
+                postMessage(getString(R.string.invalid_res));
                 return;
             }
-            final String densityText = etDensity.getText() != null ? etDensity.getText().toString().trim() : "";
-            boolean ok = Config.updateRoot(root -> {
-                if (TextUtils.isEmpty(pkg)) {
-                    JSONObject target = Config.defaultObj(root);
-                    root.put("default", target);
-                    String pfx = isDockInEditor ? "near_" : "";
-                    target.put(pfx + "w", w); target.put(pfx + "h", h);
-                    if (!TextUtils.isEmpty(densityText)) target.put(pfx + "density", parseIntStr(densityText));
-                    else target.remove(pfx + "density");
+            boolean ok;
+            try {
+                if (batch) {
+                    int density = parseOptionalDensity(densityText);
+                    ok = Config.applyBatchSettings(targets, w, h, density, enable, dock);
                 } else {
-                    JSONObject apps = Config.appsObj(root);
-                    JSONObject target = apps.optJSONObject(pkg);
-                    if (target == null) { target = new JSONObject(); apps.put(pkg, target); }
-                    root.put("apps", apps);
-                    target.put("disabled", !swEnable.isChecked());
-                    target.put("dock", swDock.isChecked());
-                    String pfx = swDock.isChecked() ? "near_" : "";
-                    target.put(pfx + "w", w); target.put(pfx + "h", h);
-                    if (!TextUtils.isEmpty(densityText)) target.put(pfx + "density", parseIntStr(densityText));
-                    else target.remove(pfx + "density");
+                    ok = Config.updateRoot(root -> writeEntry(root, targetPkg, enable, dock,
+                            w, h, densityText));
                 }
-            });
-            Toast.makeText(this, ok ? getString(R.string.saved_toast) : getString(R.string.write_failed), Toast.LENGTH_LONG).show();
-            if (ok) {
-                if (applyAfterSaving && !TextUtils.isEmpty(pkg)) {
-                    restartAppsAsync(java.util.Collections.singletonList(pkg));
-                }
-                finish();
+            } catch (Throwable t) {
+                postMessage(getString(R.string.save_failed) + ": " + t);
+                return;
             }
-        } catch (Throwable t) {
-            Toast.makeText(this, getString(R.string.save_failed) + ": " + t, Toast.LENGTH_LONG).show();
+            final boolean saved = ok;
+            runOnUiThread(() -> onSaveFinished(saved, batch, targets, targetPkg, applyAfterSaving));
+        });
+    }
+
+    /** Applies the editor values to the root object. Runs on {@code ioExecutor}. */
+    private void writeEntry(JSONObject root, String targetPkg, boolean enable, boolean dock,
+            int w, int h, String densityText) throws Exception {
+        if (TextUtils.isEmpty(targetPkg)) {
+            JSONObject target = Config.defaultObj(root);
+            root.put("default", target);
+            String pfx = dock ? "near_" : "";
+            target.put(pfx + "w", w);
+            target.put(pfx + "h", h);
+            if (!densityText.isEmpty()) target.put(pfx + "density", parseIntStr(densityText));
+            else target.remove(pfx + "density");
+            return;
         }
+        JSONObject apps = Config.appsObj(root);
+        JSONObject target = apps.optJSONObject(targetPkg);
+        if (target == null) {
+            target = new JSONObject();
+            apps.put(targetPkg, target);
+        }
+        root.put("apps", apps);
+        target.put("disabled", !enable);
+        target.put("dock", dock);
+        String pfx = dock ? "near_" : "";
+        target.put(pfx + "w", w);
+        target.put(pfx + "h", h);
+        if (!densityText.isEmpty()) target.put(pfx + "density", parseIntStr(densityText));
+        else target.remove(pfx + "density");
+    }
+
+    private void onSaveFinished(boolean ok, boolean batch, List<String> targets,
+            String targetPkg, boolean applyAfterSaving) {
+        String message = batch
+                ? getString(ok ? R.string.batch_updated : R.string.write_failed, targets.size())
+                : getString(ok ? R.string.saved_toast : R.string.write_failed);
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+        if (!ok) {
+            setInputsEnabled(true);
+            btnSave.setEnabled(true);
+            btnSaveAndApply.setEnabled(true);
+            return;
+        }
+        if (applyAfterSaving) {
+            if (batch) restartAppsAsync(targets);
+            else if (!TextUtils.isEmpty(targetPkg)) {
+                restartAppsAsync(Collections.singletonList(targetPkg));
+            }
+        }
+        finish();
+    }
+
+    private void postMessage(String message) {
+        runOnUiThread(() -> {
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+            setInputsEnabled(true);
+            btnSave.setEnabled(true);
+            btnSaveAndApply.setEnabled(true);
+        });
     }
 
     void removeOverride() {
-        try {
+        final String targetPkg = pkg;
+        btnRemove.setEnabled(false);
+        ioExecutor.execute(() -> {
             boolean ok = Config.updateRoot(root -> {
-                if (!TextUtils.isEmpty(pkg)) {
+                if (!TextUtils.isEmpty(targetPkg)) {
                     JSONObject apps = Config.appsObj(root);
-                    apps.remove(pkg);
+                    apps.remove(targetPkg);
                     root.put("apps", apps);
                 } else {
-                    root.remove("default");
+                    // Only the resolution belongs to this editor. The same object also stores the
+                    // list filters and the applyThird/applySystem gates, and the user did not ask
+                    // to reset those, so drop the six resolution keys and keep everything else.
+                    ConfigSchema.clearDefaultResolution(root);
                 }
             });
-            Toast.makeText(this, ok ? getString(R.string.remove_toast) : getString(R.string.write_failed), Toast.LENGTH_LONG).show();
-            if (ok) finish();
-        } catch (Throwable t) { Toast.makeText(this, R.string.failed, Toast.LENGTH_SHORT).show(); }
+            final boolean removed = ok;
+            runOnUiThread(() -> {
+                Toast.makeText(this, getString(removed ? R.string.remove_toast : R.string.write_failed),
+                        Toast.LENGTH_LONG).show();
+                if (removed) finish();
+                else btnRemove.setEnabled(true);
+            });
+        });
     }
 
+    private static String textOf(TextInputEditText field) {
+        Editable editable = field.getText();
+        return editable == null ? "" : editable.toString().trim();
+    }
     private boolean isBatchMode() {
         return batchPackages != null && !batchPackages.isEmpty();
     }
@@ -459,37 +540,66 @@ public class AppDetailActivity extends AppCompatActivity {
 
     private void restartApps(java.util.List<String> packages) {
         String foregroundPackage = getForegroundPackage();
+        // Resolve every relaunch target before killing anything: force-stopping first and only
+        // then discovering there is no launcher intent (background-only services, VR-only
+        // entries) leaves the app stopped with nothing able to bring it back.
+        ArrayList<Intent> launches = new ArrayList<>();
+        ArrayList<String> targets = new ArrayList<>();
         for (String packageName : packages) {
             if (TextUtils.isEmpty(packageName)) continue;
-            try {
-                Process stop = new ProcessBuilder("su", "-c", "am force-stop " + packageName).start();
-                if (stop.waitFor(15, TimeUnit.SECONDS) && stop.exitValue() == 0) {
-                    launchPackage(packageName);
-                } else {
-                    stop.destroyForcibly();
-                }
-            } catch (Throwable ignored) {
-                // Saving the configuration must still succeed when an app cannot be relaunched.
-            }
+            Intent intent = resolveLaunchIntent(packageName);
+            if (intent == null) continue;
+            targets.add(packageName);
+            launches.add(intent);
         }
-        if (!TextUtils.isEmpty(foregroundPackage) && !packages.contains(foregroundPackage)) {
-            launchPackage(foregroundPackage);
+        for (int i = 0; i < targets.size(); i++) {
+            if (forceStopQuietly(targets.get(i))) startActivitySafely(launches.get(i));
+        }
+        if (!TextUtils.isEmpty(foregroundPackage) && !targets.contains(foregroundPackage)) {
+            Intent intent = resolveLaunchIntent(foregroundPackage);
+            if (intent != null) startActivitySafely(intent);
         }
     }
 
-    private boolean isAppRunning(String packageName) {
+    /** The home-screen intent for a package, or null when nothing can bring it back. */
+    private Intent resolveLaunchIntent(String packageName) {
         try {
-            Process process = new ProcessBuilder("su", "-c", "pidof " + packageName)
-                    .redirectErrorStream(true)
-                    .start();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-            String output = reader.readLine();
-            reader.close();
-            boolean finished = process.waitFor(15, TimeUnit.SECONDS);
-            if (!finished) process.destroyForcibly();
-            return finished && process.exitValue() == 0 && !TextUtils.isEmpty(output);
+            return getPackageManager().getLaunchIntentForPackage(packageName);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private void startActivitySafely(Intent intent) {
+        try {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            getApplicationContext().startActivity(intent);
+        } catch (Throwable ignored) {
+            // Saving the configuration must still succeed when an app cannot be relaunched.
+        }
+    }
+
+    /**
+     * A root child inherits this app's pipes, and output nobody drains fills the 64 KiB buffer
+     * and then blocks inside waitFor() until the timeout expires. Silence it like Config does.
+     */
+    private boolean forceStopQuietly(String packageName) {
+        Process process = null;
+        try {
+            String quoted = "'" + packageName.replace("'", "'\\''") + "'";
+            ProcessBuilder builder = new ProcessBuilder("su", "-c", "am force-stop " + quoted);
+            java.io.File sink = new java.io.File("/dev/null");
+            if (sink.exists()) {
+                builder.redirectOutput(sink);
+                builder.redirectError(sink);
+            }
+            process = builder.start();
+            return process.waitFor(15, TimeUnit.SECONDS) && process.exitValue() == 0;
         } catch (Throwable ignored) {
             return false;
+        } finally {
+            if (process != null && process.isAlive()) process.destroyForcibly();
         }
     }
 
@@ -520,21 +630,8 @@ public class AppDetailActivity extends AppCompatActivity {
         return null;
     }
 
-    private void launchPackage(String packageName) {
-        try {
-            Intent launchIntent = getPackageManager().getLaunchIntentForPackage(packageName);
-            if (launchIntent != null) {
-                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                getApplicationContext().startActivity(launchIntent);
-            }
-        } catch (Throwable ignored) {
-        }
-    }
-
-    static int parseInt(TextInputEditText e, int def) {
-        if (e.getText() == null) return def;
-        try { return Integer.parseInt(e.getText().toString().trim()); } catch (Throwable t) { return def; }
+    static int parseInt(String value, int fallback) {
+        try { return Integer.parseInt(value.trim()); } catch (Throwable t) { return fallback; }
     }
     static int parseIntStr(String s) {
         return Integer.parseInt(s.trim());

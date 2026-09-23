@@ -41,6 +41,7 @@ import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -70,6 +71,8 @@ public class AppListActivity extends AppCompatActivity {
     private final AtomicLong reloadGeneration = new AtomicLong();
     private Future<?> reloadFuture;
     private volatile boolean destroyed;
+    private final AtomicBoolean prefsApplied = new AtomicBoolean();
+    private View filterActions;
     private final Map<String, Drawable> iconCache = new HashMap<>();
     private final Set<String> selectedPackages = new HashSet<>();
     private boolean selectionMode;
@@ -90,11 +93,12 @@ public class AppListActivity extends AppCompatActivity {
         fabBatchEdit = findViewById(R.id.fab_batch_edit);
         etSearch = findViewById(R.id.et_search);
         ivClearSearch = findViewById(R.id.iv_clear_search);
-        Config.GlobalCfg saved = Config.getGlobal();
-        showUser = saved.showUser;
-        showSystem = saved.showSystem;
-        showVR = saved.showVR;
-        showModified = saved.showModified;
+        // Restored defaults; readPrefs() replaces them once the root-backed read returns.
+        showUser = true;
+        showSystem = false;
+        showVR = false;
+        showModified = true;
+        readPrefs();
 
         recycler.setLayoutManager(new GridLayoutManager(this, 2));
         adapter = new AppAdapter();
@@ -129,12 +133,33 @@ public class AppListActivity extends AppCompatActivity {
         });
     }
 
+    /**
+     * Restores the saved filter state. The configuration lives behind {@code su}, and a slow or
+     * refused root prompt would otherwise stall activity creation until the read times out.
+     */
+    private void readPrefs() {
+        configExecutor.execute(() -> {
+            Config.GlobalCfg saved = Config.getGlobal();
+            handler.post(() -> {
+                if (destroyed || isFinishing() || !prefsApplied.compareAndSet(false, true)) return;
+                showUser = saved.showUser;
+                showSystem = saved.showSystem;
+                showVR = saved.showVR;
+                showModified = saved.showModified;
+                if (filterActions != null) renderFilterButtons(filterActions);
+                // The initial reload may have already run with the defaults above.
+                reload();
+            });
+        });
+    }
+
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         getMenuInflater().inflate(R.menu.menu_list, menu);
         MenuItem item = menu.findItem(R.id.menu_filter);
         View actionView = item.getActionView();
         if (actionView != null) {
+            filterActions = actionView;
             MaterialButton btnMod = actionView.findViewById(R.id.btn_filter_modified);
             MaterialButton btnUser = actionView.findViewById(R.id.btn_filter_user);
             MaterialButton btnSys = actionView.findViewById(R.id.btn_filter_system);
@@ -200,21 +225,35 @@ public class AppListActivity extends AppCompatActivity {
         input.setMinLines(8);
         input.setHint("{\n  \"apps\": {\n    \"com.example.app\": {\"w\":1920,\"h\":1080,\"density\":240,\"dock\":true}\n  }\n}");
         new AlertDialog.Builder(this)
-                .setTitle("Batch Import")
-                .setMessage("Paste JSON with default and/or apps. Existing entries with the same package will be replaced.")
+                .setTitle(R.string.batch_import_title)
+                .setMessage(R.string.batch_import_message)
                 .setView(input)
-                .setPositiveButton("Import", (d, which) -> {
+                .setPositiveButton(R.string.batch_import_action, (d, which) -> {
                     executor.execute(() -> {
-                        String result = Config.applyBatchJson(String.valueOf(input.getText()));
+                        Config.BatchImportResult outcome =
+                                Config.applyBatchJson(String.valueOf(input.getText()));
                         handler.post(() -> {
                             if (destroyed || isFinishing()) return;
-                            android.widget.Toast.makeText(this, result, android.widget.Toast.LENGTH_LONG).show();
+                            android.widget.Toast.makeText(this, importMessage(outcome),
+                                    android.widget.Toast.LENGTH_LONG).show();
                             reload();
                         });
                     });
                 })
-                .setNegativeButton(android.R.string.cancel, (d, which) -> exitSelectionMode())
+                // Cancelling the dialog must leave the current multi-selection untouched.
+                .setNegativeButton(android.R.string.cancel, null)
                 .show();
+    }
+
+    private String importMessage(Config.BatchImportResult outcome) {
+        switch (outcome.status) {
+            case OK:
+                return getString(R.string.batch_imported, outcome.count);
+            case WRITE_FAILED:
+                return getString(R.string.write_failed);
+            default:
+                return getString(R.string.batch_import_rejected);
+        }
     }
 
     private void exitSelectionMode() {
@@ -298,8 +337,12 @@ public class AppListActivity extends AppCompatActivity {
         if (reloadFuture != null) reloadFuture.cancel(true);
         reloadFuture = executor.submit(() -> {
             if (!isAlive(generation)) return;
-            Config.GlobalCfg currentGlob = Config.getGlobal();
-            List<Config.AppEntry> result = Config.listApps(this, u, s, v, m, currentGlob);
+            // One privileged read for both consumers: getGlobal() and listApps() each did their
+            // own, and every read is a potential round trip through su.
+            org.json.JSONObject root = Config.readRoot();
+            Config.GlobalCfg currentGlob = Config.globalFrom(root);
+            List<Config.AppEntry> result =
+                    Config.listApps(this, u, s, v, m, currentGlob, Config.appsObj(root));
 
             // Sort: Custom first, then by label alphabet
             result.sort((a, b) -> {
@@ -370,7 +413,11 @@ public class AppListActivity extends AppCompatActivity {
             String prefix = e.hasOverride
                     ? h.root.getContext().getString(R.string.custom_prefix)
                     : h.root.getContext().getString(R.string.default_prefix);
-            String res = prefix + e.w + "x" + e.h + (e.density > 0 ? " @" + e.density : "");
+            String res = e.w > 0 && e.h > 0
+                    ? prefix + e.w + "x" + e.h + (e.density > 0 ? " @" + e.density : "")
+                    // A blank entry means neither a per-app override nor a configured default
+                    // applies, so nothing is being resized - say so instead of inventing one.
+                    : h.root.getContext().getString(R.string.res_follow_system);
             h.res.setText(res);
             if (e.hasOverride) {
                 h.res.setTextColor(h.root.getContext().getColor(R.color.primary));

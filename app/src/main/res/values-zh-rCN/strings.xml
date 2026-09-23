@@ -48,4 +48,11 @@
     <string name="batch_enable">启用分辨率覆盖</string>
     <string name="batch_dock">使用基座模式</string>
     <string name="batch_updated">已更新 %1$d 个应用</string>
+    <string name="batch_import_title">批量导入</string>
+    <string name="batch_import_message">粘贴包含 default 和/或 apps 的 JSON。同包名的现有条目将被覆盖。</string>
+    <string name="batch_import_action">导入</string>
+    <string name="batch_imported">已导入 %1$d 项</string>
+    <string name="batch_import_rejected">没有可导入的有效内容</string>
+    <!-- 未对该应用生效任何覆盖或全局默认值时显示 -->
+    <string name="res_follow_system">跟随系统</string>
 </resources>

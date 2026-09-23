@@ -51,4 +51,11 @@
     <string name="batch_enable">Enable resolution override</string>
     <string name="batch_dock">Use Dock mode</string>
     <string name="batch_updated">Updated %1$d apps</string>
+    <string name="batch_import_title">Batch Import</string>
+    <string name="batch_import_message">Paste JSON with default and/or apps. Existing entries with the same package will be replaced.</string>
+    <string name="batch_import_action">Import</string>
+    <string name="batch_imported">Imported %1$d item(s)</string>
+    <string name="batch_import_rejected">Nothing valid to import</string>
+    <!-- Shown instead of a resolution when nothing is actually being applied to this app. -->
+    <string name="res_follow_system">Follow system</string>
 </resources>

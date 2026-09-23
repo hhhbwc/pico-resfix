@@ -65,6 +65,49 @@ public final class ConfigSchema {
         return density >= MIN_DENSITY && density <= MAX_DENSITY;
     }
 
+    /**
+     * Resolves which JSON keys carry the requested window mode's resolution.
+     *
+     * <p>Entries written before Floating and Dock were separated only ever had {@code w/h/density}
+     * and used them for both modes. Dock keeps reading that legacy pair when its own keys are
+     * absent, so upgrading firmware or GUI does not silently drop existing configurations.
+     * Every consumer must route through this helper; duplicating the rules locally is how
+     * {@code ResFix} and {@code Config} previously drifted apart.
+     */
+    public static String[] resolutionKeys(boolean dock, JSONObject value) {
+        String widthKey = dock ? "near_w" : "w";
+        String heightKey = dock ? "near_h" : "h";
+        String densityKey = dock ? "near_density" : "density";
+        if (dock && value != null && (!value.has(widthKey) || !value.has(heightKey))) {
+            widthKey = "w";
+            heightKey = "h";
+            densityKey = "density";
+        }
+        return new String[]{widthKey, heightKey, densityKey};
+    }
+
+    /**
+     * Names that only carry a resolution. Everything else under {@code default} is a UI
+     * preference (the four {@code show*} filters, {@code applyThird}, {@code applySystem}),
+     * so clearing a configured default must key off these names instead of dropping the
+     * whole object.
+     */
+    private static final String[] RESOLUTION_KEYS = {
+            "w", "h", "density", "near_w", "near_h", "near_density"
+    };
+
+    /**
+     * Removes the default resolution while keeping the unrelated preferences stored beside it.
+     * An object left with nothing in it is dropped so "no default" stays indistinguishable
+     * from "never configured".
+     */
+    public static void clearDefaultResolution(JSONObject root) {
+        JSONObject value = root == null ? null : root.optJSONObject("default");
+        if (value == null) return;
+        for (String key : RESOLUTION_KEYS) value.remove(key);
+        if (value.length() == 0) root.remove("default");
+    }
+
     private static void validateDefault(JSONObject value) throws JSONException {
         validateResolution(value, "w", "h", "density");
         validateResolution(value, "near_w", "near_h", "near_density");

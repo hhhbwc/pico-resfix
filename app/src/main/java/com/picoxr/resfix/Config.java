@@ -25,6 +25,11 @@ public final class Config {
 
     public static final String PATH = "/data/local/tmp/resfix.cfg";
 
+    /** Settings.Global keys mirrored for the hook inside SystemExt; it reads these names verbatim. */
+    public static final String CONFIG_SETTING = "pico_systemext_coord_resfix_config";
+    public static final String GENERATION_SETTING = "pico_systemext_coord_resfix_generation";
+    public static final String PANELS_SETTING = "pico_systemext_coord_resfix_panels";
+
     /** One app descriptor shown in the list. */
     public static class AppEntry {
         public String pkg;
@@ -38,6 +43,12 @@ public final class Config {
     public static class GlobalCfg {
         public int floatingWidth = 1602, floatingHeight = 902, floatingDensity = 200;   // Far mode default
         public int dockWidth = 1127, dockHeight = 752, dockDensity = 200; // Near mode default
+        /**
+         * The values above are what the editor pre-fills, not what the module applies. Nothing
+         * is resized until a default is written explicitly, so every consumer that reports a
+         * default resolution has to check these flags first.
+         */
+        public boolean floatingConfigured, dockConfigured;
         public boolean applyThird = true, applySystem = false;
         public boolean showUser = true, showSystem = false, showVR = false, showModified = true;
     }
@@ -143,16 +154,28 @@ public final class Config {
     }
 
     public static GlobalCfg getGlobal() {
+        return globalFrom(readRoot());
+    }
+
+    /** Reads the preferences out of an already loaded root so one read serves several callers. */
+    public static GlobalCfg globalFrom(JSONObject root) {
         GlobalCfg g = new GlobalCfg();
+        if (root == null) return g;
         try {
-            JSONObject d = defaultObj(readRoot());
+            JSONObject d = defaultObj(root);
             g.floatingWidth = d.optInt("w", g.floatingWidth);
             g.floatingHeight = d.optInt("h", g.floatingHeight);
             g.floatingDensity = d.has("density") ? d.getInt("density") : g.floatingDensity;
 
-            g.dockWidth = d.optInt("near_w", g.dockWidth);
-            g.dockHeight = d.optInt("near_h", g.dockHeight);
-            g.dockDensity = d.has("near_density") ? d.getInt("near_density") : g.dockDensity;
+            // Mirror the hook's legacy fallback: a config written before Floating and Dock were
+            // separated only has w/h, and its Dock values must match what SystemExt will apply.
+            String[] dockKeys = ConfigSchema.resolutionKeys(true, d);
+            g.dockWidth = d.optInt(dockKeys[0], g.dockWidth);
+            g.dockHeight = d.optInt(dockKeys[1], g.dockHeight);
+            g.dockDensity = d.has(dockKeys[2]) ? d.getInt(dockKeys[2]) : g.dockDensity;
+
+            g.floatingConfigured = d.has("w") && d.has("h");
+            g.dockConfigured = d.has(dockKeys[0]) && d.has(dockKeys[1]);
 
             g.applyThird = d.optBoolean("applyThird", true);
             g.applySystem = d.optBoolean("applySystem", false);
@@ -165,7 +188,12 @@ public final class Config {
         return g;
     }
 
-    public static List<AppEntry> listApps(Context ctx, boolean showUser, boolean showSystem, boolean showVR, boolean showModified, GlobalCfg glob) {
+    /**
+     * @param appsJ already loaded {@code apps} object; callers that have the root beside them
+     *              should pass it so each list does not pay for a second privileged read.
+     */
+    public static List<AppEntry> listApps(Context ctx, boolean showUser, boolean showSystem,
+            boolean showVR, boolean showModified, GlobalCfg glob, JSONObject appsJ) {
         List<AppEntry> out = new ArrayList<>();
         try {
             PackageManager pm = ctx.getPackageManager();
@@ -179,7 +207,7 @@ public final class Config {
             java.util.Collections.sort(sorted,
                     (a, b) -> labels.get(a == null ? null : a.packageName)
                             .compareToIgnoreCase(labels.get(b == null ? null : b.packageName)));
-            JSONObject appsJ = appsObj(readRoot());
+            if (appsJ == null) appsJ = appsObj(readRoot());
             for (ApplicationInfo ai : sorted) {
                 if (ai == null) continue;
                 String pkg = ai.packageName;
@@ -213,15 +241,10 @@ public final class Config {
                         // Treat that as a configured entry so filters cannot hide it.
                         hasOverride = resolutionEnabled || a.has("dock");
                         if (a.has("dock")) overDock = a.optBoolean("dock", false);
-                        String widthKey = overDock ? "near_w" : "w";
-                        String heightKey = overDock ? "near_h" : "h";
-                        String densityKey = overDock ? "near_density" : "density";
-                        // Legacy app entries used w/h for both modes.
-                        if (overDock && (!a.has(widthKey) || !a.has(heightKey))) {
-                            widthKey = "w";
-                            heightKey = "h";
-                            densityKey = "density";
-                        }
+                        String[] keys = ConfigSchema.resolutionKeys(overDock, a);
+                        String widthKey = keys[0];
+                        String heightKey = keys[1];
+                        String densityKey = keys[2];
                         overW = a.optInt(widthKey, 0);
                         overH = a.optInt(heightKey, 0);
                         overD = a.has(densityKey) ? a.optInt(densityKey, -1) : -1;
@@ -255,10 +278,14 @@ public final class Config {
                     e.h = overH;
                     e.density = overD;
                 } else {
-                    if (e.isDock) {
-                        e.w = glob.dockWidth; e.h = glob.dockHeight; e.density = glob.dockDensity;
-                    } else {
-                        e.w = glob.floatingWidth; e.h = glob.floatingHeight; e.density = glob.floatingDensity;
+                    // Without a configured default the hook leaves these apps alone, so the list
+                    // must not dress them up with the editor's placeholder values - leave the
+                    // entry blank and let the UI say nothing is being applied.
+                    boolean configured = e.isDock ? glob.dockConfigured : glob.floatingConfigured;
+                    if (configured) {
+                        e.w = e.isDock ? glob.dockWidth : glob.floatingWidth;
+                        e.h = e.isDock ? glob.dockHeight : glob.floatingHeight;
+                        e.density = e.isDock ? glob.dockDensity : glob.floatingDensity;
                     }
                 }
                 out.add(e);
@@ -308,10 +335,9 @@ public final class Config {
             ConfigSchema.validate(root);
             if (json.getBytes(StandardCharsets.UTF_8).length > ConfigSchema.MAX_CONFIG_BYTES) return false;
             String tmp = PATH + ".tmp." + android.os.Process.myPid();
-            Process p = new ProcessBuilder("su", "-c",
+            Process p = silence(new ProcessBuilder("su", "-c",
                     "umask 000; cat > '" + tmp + "' && chmod 666 '" + tmp
-                            + "' && mv -f '" + tmp + "' '" + PATH + "'")
-                    .redirectErrorStream(false).start();
+                            + "' && mv -f '" + tmp + "' '" + PATH + "'")).start();
             java.io.OutputStream os = p.getOutputStream();
             os.write(json.getBytes(StandardCharsets.UTF_8));
             os.flush();
@@ -323,11 +349,8 @@ public final class Config {
 
             // Sync to Settings.Global to bypass SELinux file restrictions for the hook
             String escaped = json.replace("'", "'\\''");
-            Process settings = new ProcessBuilder("su", "-c",
-                    "settings put global pico_systemext_coord_resfix_config '" + escaped + "'").start();
-            boolean settingsWritten = settings.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
-                    && settings.exitValue() == 0;
-            if (!settingsWritten && settings.isAlive()) settings.destroyForcibly();
+            boolean settingsWritten = runRootCommand(
+                    "settings put global " + CONFIG_SETTING + " '" + escaped + "'");
             String persisted = readRaw();
             if (!settingsWritten) {
                 // The file is authoritative; Settings.Global is only a restricted-device fallback.
@@ -342,6 +365,35 @@ public final class Config {
         }
     }
 
+    /**
+     * Runs a root command whose output nobody reads. Leaving the pipes unattended lets a child
+     * that prints more than the 64 KiB buffer block until waitFor() gives up, which stalls every
+     * configuration write by its full timeout, so point them at /dev/null instead.
+     */
+    private static boolean runRootCommand(String command) {
+        Process p = null;
+        try {
+            p = silence(new ProcessBuilder("su", "-c", command)).start();
+            return p.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0;
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            if (p != null && p.isAlive()) p.destroyForcibly();
+        }
+    }
+
+    private static ProcessBuilder silence(ProcessBuilder builder) {
+        try {
+            // Always present on Android; the fallback keeps /dev/null-less hosts buildable.
+            File sink = new File("/dev/null");
+            if (sink.exists()) {
+                builder.redirectOutput(sink);
+                builder.redirectError(sink);
+            }
+        } catch (Throwable ignored) {}
+        return builder;
+    }
+
     private static void publishCoordination(JSONObject root) {
         try {
             int panels = 0;
@@ -351,20 +403,28 @@ public final class Config {
                 JSONObject app = apps.optJSONObject(keys.next());
                 if (app != null && app.optBoolean("dock", false)) panels++;
             }
-            Process p = new ProcessBuilder("su", "-c",
-                    "settings put global pico_systemext_coord_resfix_panels " + panels
-                            + "; settings put global pico_systemext_coord_resfix_generation "
-                            + System.currentTimeMillis())
-                    .start();
-            if (!p.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) && p.isAlive()) {
-                p.destroyForcibly();
-            }
+            runRootCommand("settings put global " + PANELS_SETTING + " " + panels
+                    + "; settings put global " + GENERATION_SETTING + " "
+                    + System.currentTimeMillis());
         } catch (Throwable ignored) {
         }
     }
 
-    public static String applyBatchJson(String raw) {
-        if (raw == null) return "No input";
+    /** Outcome of a batch import, kept structural so the caller can supply localized wording. */
+    public static final class BatchImportResult {
+        public enum Status { OK, WRITE_FAILED, REJECTED }
+
+        public final Status status;
+        public final int count;
+
+        BatchImportResult(Status status, int count) {
+            this.status = status;
+            this.count = count;
+        }
+    }
+
+    public static BatchImportResult applyBatchJson(String raw) {
+        if (raw == null) return new BatchImportResult(BatchImportResult.Status.REJECTED, 0);
         try {
             JSONObject input = ConfigSchema.parse(raw.trim());
             final int[] count = {0};
@@ -389,9 +449,10 @@ public final class Config {
                 if (count[0] <= 0) throw new IllegalArgumentException("No batch entries");
                 root.put("apps", apps);
             });
-            return ok ? "Imported " + count[0] + " item(s)" : "Write failed";
+            return ok ? new BatchImportResult(BatchImportResult.Status.OK, count[0])
+                    : new BatchImportResult(BatchImportResult.Status.WRITE_FAILED, 0);
         } catch (Throwable t) {
-            return "Import failed: " + t.getClass().getSimpleName();
+            return new BatchImportResult(BatchImportResult.Status.REJECTED, 0);
         }
     }
 
@@ -413,6 +474,7 @@ public final class Config {
                     entry.put(prefix + "w", w);
                     entry.put(prefix + "h", h);
                     if (density > 0) entry.put(prefix + "density", density);
+                    else entry.remove(prefix + "density");
                     apps.put(pkg, entry);
                     changed[0]++;
                 }

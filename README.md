@@ -7,7 +7,7 @@ Allows **per-app configuration** of 2D virtual display resolution (no longer loc
 
 Implemented by injecting into `com.picovr.systemext` using **Zygisk Vector (LSPosed compatible framework)** — no system APK replacement required.
 
-**Current release: v1.4**
+**Current release: v1.4.2**
 
 ---
 
@@ -24,7 +24,7 @@ Implemented by injecting into `com.picovr.systemext` using **Zygisk Vector (LSPo
 
 | Item | Original | Unlocked |
 |---|---|---|
-| 2D App Virtual Display Resolution | 1602×902 (density 200) | **Per-app configuration** (Default 2560×1440) |
+| 2D App Virtual Display Resolution | 1602×902 (density 200) | **Per-app configuration** (no default is applied until you set one in Default Settings) |
 | DPI | Fixed at 200 | **Overridable per-app** (Optional) |
 | Window Mode | APK-defined Floating or Dock | **Force Floating or Near-field Dock per app** |
 | Scope | All 2D Apps | **Enabled by default for non-system apps, optional for system apps** |
@@ -77,8 +77,8 @@ Config path: /data/local/tmp/resfix.cfg (JSON)
 - `default`: Uniform resolution for non-configured non-system apps (when applyThird=true).
 - `apps.<pkg>`: Individual override for an app (use `"disabled": true` to disable). `w/h/density` configure Floating mode; `near_w/near_h/near_density` configure Dock mode. Both sets are retained, so changing one mode does not erase the other.
 - `apps.<pkg>.dock`: `true` routes the app to the native Near-field Dock (type 2002); `false` forces the normal far floating window (type 3002), including apps previously converted by Pico2Dock. The active mode selects its own resolution set.
-- `density` omitted = Follow system; do not write `-1` as a JSON value.
-- Width must be 320–7680 px, height 240–4320 px, and density 72–1000. Invalid, incomplete, or wrongly typed entries are rejected before they reach SystemExt.
+- `density` omitted = Follow system; do not write `-1` as a JSON value. Leave the DPI field blank rather than entering `0`.
+- Width must be 320–3840 px, height 240–2162 px, and density 72–1000. Invalid, incomplete, or wrongly typed entries are rejected before they reach SystemExt.
 - A configuration may contain at most 500 app entries and must not exceed 256 KiB. If `Settings.Global` has invalid content, the hook falls back to the config file; if both sources fail, it keeps the last valid configuration.
 
 After changing a per-app setting, use **Apply & Restart App** to save it and restart the selected target app. The plain **Save** button writes the configuration without restarting it. Default settings have no single target app, so they still require restarting affected apps manually.
@@ -130,4 +130,4 @@ Requirements: JDK 17 + Android SDK (platform 34, build-tools 34). Use the checke
 
 ## 7. Versioning
 
-Android `versionName`, Git tag, GitHub Release title, and release APK filename use the same version number. For example, v1.4 is published as tag `1.4` with `Pico-ResFix-v1.4.apk`.
+Android `versionName`, Git tag, GitHub Release title, and release APK filename use the same version number. For example, v1.4.2 is published as tag `v1.4.2` with `pico-resfix-v1.4.2.apk`.

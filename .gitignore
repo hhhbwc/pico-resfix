@@ -12,3 +12,6 @@ app/libs/stub_sources.txt
 # screenshots
 *.png
 /.idea
+
+# on-device test captures (config dumps, UI hierarchies)
+device-backup/

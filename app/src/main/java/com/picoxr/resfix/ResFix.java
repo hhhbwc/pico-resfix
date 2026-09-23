@@ -78,8 +78,18 @@ public class ResFix implements IXposedHookLoadPackage {
     /** getPackageName() lookup per class, including the "no such method" negative. */
     private static final ConcurrentHashMap<Class<?>, Optional<Method>> GETTER_CACHE =
             new ConcurrentHashMap<>();
-    /** Last window type routed per package, so per-callback logging only fires on change. */
-    private static final ConcurrentHashMap<String, Integer> lastRoutedType = new ConcurrentHashMap<>();
+    /** Last routed settings per package, so per-callback logging only fires on change. */
+    private static final ConcurrentHashMap<String, String> lastRoute = new ConcurrentHashMap<>();
+    /**
+     * Native dock classification per package. Resolving it costs a PackageManager binder call
+     * per hook event, so the answer is reused until something could have invalidated it.
+     */
+    private static final ConcurrentHashMap<String, Boolean> nativeDockCache = new ConcurrentHashMap<>();
+    /** System-app classification per package, used when the container cannot be asked directly. */
+    private static final ConcurrentHashMap<String, Boolean> systemAppCache = new ConcurrentHashMap<>();
+    /** Config generation the derived caches above belong to; a new one discards them. */
+    private static volatile String cachedGeneration;
+    private static volatile boolean loggedUnclassifiableApp;
 
     private static Context systemContext() {
         try {
@@ -135,7 +145,21 @@ public class ResFix implements IXposedHookLoadPackage {
         String key = (generation == null ? "" : generation) + ":" + content.hashCode();
         Snapshot fresh = new Snapshot(key, parsed);
         snapshot = fresh;
+        invalidateDerivedCaches(key);
         return fresh;
+    }
+
+    /**
+     * Drops the per-package probe caches whenever the configuration revision changes. Bindings
+     * derived from package metadata can go stale after an install, update or uninstall, and the
+     * GUI bumps the generation setting on every write, so a new key means "re-resolve everything".
+     */
+    private static void invalidateDerivedCaches(String key) {
+        if (cachedGeneration != null && cachedGeneration.equals(key)) return;
+        cachedGeneration = key;
+        nativeDockCache.clear();
+        systemAppCache.clear();
+        lastRoute.clear();
     }
 
     private static JSONObject parseConfig(String text, String source) {
@@ -172,12 +196,10 @@ public class ResFix implements IXposedHookLoadPackage {
         JSONObject value = configSnapshot().root.optJSONObject("default");
         if (value == null) return new Cfg(0, 0, -1, true, false);
         try {
-            String widthKey = dock ? "near_w" : "w";
-            String heightKey = dock ? "near_h" : "h";
-            String densityKey = dock ? "near_density" : "density";
-            int width = value.has(widthKey) ? value.getInt(widthKey) : 0;
-            int height = value.has(heightKey) ? value.getInt(heightKey) : 0;
-            int density = value.has(densityKey) ? value.getInt(densityKey) : -1;
+            String[] keys = ConfigSchema.resolutionKeys(dock, value);
+            int width = value.has(keys[0]) ? value.getInt(keys[0]) : 0;
+            int height = value.has(keys[1]) ? value.getInt(keys[1]) : 0;
+            int density = value.has(keys[2]) ? value.getInt(keys[2]) : -1;
             return new Cfg(width, height, density, value.optBoolean("applyThird", true),
                     value.optBoolean("applySystem", false));
         } catch (Throwable t) {
@@ -192,18 +214,10 @@ public class ResFix implements IXposedHookLoadPackage {
         JSONObject value = apps == null ? null : apps.optJSONObject(pkg);
         if (value == null || value.optBoolean("disabled", false)) return null;
         try {
-            String widthKey = dock ? "near_w" : "w";
-            String heightKey = dock ? "near_h" : "h";
-            String densityKey = dock ? "near_density" : "density";
-            // Older entries only had w/h; keep them working for Dock until explicitly split.
-            if (dock && (!value.has(widthKey) || !value.has(heightKey))) {
-                widthKey = "w";
-                heightKey = "h";
-                densityKey = "density";
-            }
-            int width = value.getInt(widthKey);
-            int height = value.getInt(heightKey);
-            int density = value.has(densityKey) ? value.getInt(densityKey) : -1;
+            String[] keys = ConfigSchema.resolutionKeys(dock, value);
+            int width = value.getInt(keys[0]);
+            int height = value.getInt(keys[1]);
+            int density = value.has(keys[2]) ? value.getInt(keys[2]) : -1;
             return ConfigSchema.isResolutionValid(width, height)
                     && (density < 0 || ConfigSchema.isDensityValid(density))
                     ? new Cfg(width, height, density, true, false) : null;
@@ -220,6 +234,11 @@ public class ResFix implements IXposedHookLoadPackage {
         return app != null && app.has("dock") ? app.optBoolean("dock") : null;
     }
 
+    /**
+     * Reflective probe for {@code isSystemApp()} on the hooked container. Returns null when the
+     * container does not expose it; hook callbacks run often, so this stays silent and leaves
+     * the fallback in {@link #classifySystemApp} to answer.
+     */
     static Boolean isSystemApp(Object container) {
         if (container == null) return null;
         try {
@@ -228,7 +247,48 @@ public class ResFix implements IXposedHookLoadPackage {
             Object result = method.invoke(container);
             return result instanceof Boolean ? (Boolean) result : null;
         } catch (Throwable t) {
-            log("unable to classify app record", t);
+            return null;
+        }
+    }
+
+    /**
+     * Classifies an app so the {@code applyThird}/{@code applySystem} gates can be enforced.
+     *
+     * <p>Reflection alone is not enough: the resolution hook runs against an AppContainer, while
+     * AppRecord is the class that carries {@code isSystemApp()}. Trusting the reflective probe
+     * only would make the global default silently inapplicable to every third-party app, which is
+     * the module's headline feature. PackageManager can always answer by package name, so use it
+     * whenever the container cannot.
+     */
+    private static Boolean classifySystemApp(Object container, String pkg) {
+        Boolean reflected = isSystemApp(container);
+        if (reflected != null) return reflected;
+        if (pkg == null) return null;
+        Boolean cached = systemAppCache.get(pkg);
+        if (cached != null) return cached;
+        Boolean fromPackageManager = systemAppFromPackageManager(pkg);
+        if (fromPackageManager != null) {
+            systemAppCache.put(pkg, fromPackageManager);
+            return fromPackageManager;
+        }
+        // A transient PackageManager failure must not poison the cache, and must not repeat a
+        // diagnostic for every hook event either.
+        if (!loggedUnclassifiableApp) {
+            loggedUnclassifiableApp = true;
+            log("cannot classify " + pkg + "; global defaults stay inactive for it", null);
+        }
+        return null;
+    }
+
+    private static Boolean systemAppFromPackageManager(String pkg) {
+        try {
+            Context context = systemContext();
+            if (context == null || pkg == null) return null;
+            ApplicationInfo info = context.getPackageManager().getApplicationInfo(pkg, 0);
+            if (info == null) return null;
+            return (info.flags & (ApplicationInfo.FLAG_SYSTEM
+                    | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0;
+        } catch (Throwable t) {
             return null;
         }
     }
@@ -317,29 +377,40 @@ public class ResFix implements IXposedHookLoadPackage {
         if (stack.isEmpty()) launchingPackages.remove();
     }
 
-    static boolean nativeDockMode(String pkg, Object appRecord) {
+    /**
+     * Native dock classification, i.e. what the APK itself declares. Returns null when the answer
+     * cannot be resolved so the caller can keep its own default instead of caching a wrong "no".
+     */
+    private static Boolean probeNativeDockMode(String pkg) {
         try {
             Context context = systemContext();
-            if (context == null || pkg == null) return false;
+            if (context == null || pkg == null) return null;
             PackageManager pm = context.getPackageManager();
-            ApplicationInfo ai = pm.getApplicationInfo(
-                    pkg, PackageManager.GET_META_DATA);
+            ApplicationInfo ai = pm.getApplicationInfo(pkg, PackageManager.GET_META_DATA);
             return Config.isAppDockMode(pm, pkg, ai);
         } catch (Throwable ignored) {
-            return false;
+            return null;
         }
+    }
+
+    static boolean nativeDockMode(String pkg) {
+        Boolean cached = pkg == null ? null : nativeDockCache.get(pkg);
+        if (cached != null) return cached;
+        Boolean probed = probeNativeDockMode(pkg);
+        if (probed != null && pkg != null) nativeDockCache.put(pkg, probed);
+        return probed != null ? probed : false;
     }
 
     /** Returns null when this AppRecord should not be resized. */
     static Cfg decide(String pkg, Object appRecord) {
         if (SELF_PACKAGE.equals(pkg)) return null;
         Boolean dock = dockOverride(pkg);
-        boolean effectiveDock = dock != null ? dock : nativeDockMode(pkg, appRecord);
+        boolean effectiveDock = dock != null ? dock : nativeDockMode(pkg);
         Cfg app = appConfig(pkg, effectiveDock);
         if (app != null) return app;
         Cfg global = defaultConfig(effectiveDock);
         if (!ConfigSchema.isResolutionValid(global.w, global.h)) return null;
-        Boolean system = isSystemApp(appRecord);
+        Boolean system = classifySystemApp(appRecord, pkg);
         if (system == null) return null;
         if (system && !global.applySystem) return null;
         if (!system && !global.applyThird) return null;
@@ -379,8 +450,15 @@ public class ResFix implements IXposedHookLoadPackage {
                                 setInt(param.thisObject, "mHeight", targetH, true);
                                 if (cfg.density > 0) setInt(param.thisObject, "mDensity", targetDensity, false);
 
-                                XposedBridge.log(TAG + ": route " + pkg + " -> "
-                                        + targetW + "x" + targetH + "@" + targetDensity);
+                                // This hook fires for every virtual display the system keeps
+                                // alive, so report a package only when its route actually moved.
+                                Boolean dock = dockOverride(pkg);
+                                String route = targetW + "x" + targetH + "@" + targetDensity
+                                        + (Boolean.TRUE.equals(dock) ? " dock"
+                                        : Boolean.FALSE.equals(dock) ? " floating" : "");
+                                if (!route.equals(lastRoute.put(pkg, route))) {
+                                    XposedBridge.log(TAG + ": route " + pkg + " -> " + route);
+                                }
                             } catch (Throwable t) {
                                 log("createVirtualDisplay hook failed", t);
                             }
@@ -466,10 +544,13 @@ public class ResFix implements IXposedHookLoadPackage {
 
         hook("AppManagerUtils.isNearPanel", () -> hookBooleanReturn(
                 appManagerUtils, "isNearPanel", pkgFromFirstArgOrLaunch(), true));
+        // Same provider for all of these: when the first argument is a plain package name String
+        // it carries no packageName field, so the launch context is the only way to identify the
+        // app. Without it these overrides silently never fired.
         hook("AppManagerUtils.isVrActivity", () -> hookBooleanReturn(
-                appManagerUtils, "isVrActivity", pkgFromFirstArg(), false));
+                appManagerUtils, "isVrActivity", pkgFromFirstArgOrLaunch(), false));
         hook("AppManagerUtils.isVrApp", () -> hookBooleanReturn(
-                appManagerUtils, "isVrApp", pkgFromFirstArg(), false));
+                appManagerUtils, "isVrApp", pkgFromFirstArgOrLaunch(), false));
         hook("AppManagerUtils.getVrSpacePosition", () -> hookStringReturn(
                 appManagerUtils, "getVrSpacePosition",
                 pkgFromFirstArgOrLaunch(), NEAR_SPACE_POSITION));
@@ -508,7 +589,11 @@ public class ResFix implements IXposedHookLoadPackage {
                     }
                 }));
 
-        installAppRecordObtainHook(lp, appRecord);
+        try {
+            installAppRecordObtainHook(lp, appRecord);
+        } catch (Throwable t) {
+            log("failed to install AppRecord.obtain hook", t);
+        }
         installDockRoutingExtras(lp);
     }
 
@@ -552,39 +637,53 @@ public class ResFix implements IXposedHookLoadPackage {
         // These names are internal PICO routing APIs. The exact overloads are selected by
         // return type below, so a changed or absent overload is skipped instead of receiving
         // a result whose type could throw at its call site.
-        final Class<?> appManagerService, immersiveModeManager, activityStarterControl, controlUtils;
-        try {
-            appManagerService = XposedHelpers.findClass(
-                    "com.bytedance.nativeshell.appmanager.AppManagerService", lp.classLoader);
-            immersiveModeManager = XposedHelpers.findClass(
-                    "com.bytedance.nativeshell.appmanager.action.ImmersiveModeManager", lp.classLoader);
-            activityStarterControl = XposedHelpers.findClass(
-                    "com.bytedance.nativeshell.appmanager.ActivityStarterControl", lp.classLoader);
-            controlUtils = XposedHelpers.findClass(
-                    "com.bytedance.nativeshell.appmanager.util.ActivityStarterControlUtils", lp.classLoader);
-        } catch (Throwable t) {
-            // The core dock and window hooks remain active; the optional routing fixes are
-            // only useful for specific firmware builds and need no diagnostic noise.
-            return;
+        //
+        // Each class is resolved on its own: these routing fixes target specific firmware
+        // builds, so one missing class must not take down the ones that resolved fine.
+        Class<?> appManagerService = findClassQuietly(lp,
+                "com.bytedance.nativeshell.appmanager.AppManagerService");
+        if (appManagerService != null) {
+            hook("AppManagerService.notifyAllowAppStart", () -> hookBooleanReturn(
+                    appManagerService, "notifyAllowAppStart", pkgFromFirstArgOrLaunch(), true));
+            hook("AppManagerService.onAllowStartApp", () -> hookBooleanReturn(
+                    appManagerService, "onAllowStartApp", pkgFromFirstArgOrLaunch(), true));
+            // Void display-tip methods have no return value, so suppressing is a safe no-return
+            // override. Only exact void overloads matching the configured dock package run.
+            hook("AppManagerService.showImmersiveTips", () -> hookVoidReturn(
+                    appManagerService, "showImmersiveTips"));
         }
 
-        hook("AppManagerService.notifyAllowAppStart", () -> hookBooleanReturn(
-                appManagerService, "notifyAllowAppStart", pkgFromFirstArg(), true));
-        hook("AppManagerService.onAllowStartApp", () -> hookBooleanReturn(
-                appManagerService, "onAllowStartApp", pkgFromFirstArg(), true));
-        hook("ImmersiveModeManager.onAllowStartApp", () -> hookBooleanReturn(
-                immersiveModeManager, "onAllowStartApp", pkgFromFirstArg(), true));
-        hook("ActivityStarterControl.checkAppSwitchAllowed", () -> hookBooleanReturn(
-                activityStarterControl, "checkAppSwitchAllowed", pkgFromFirstArg(), true));
-        hook("ActivityStarterControlUtils.checkAppSwitchAllowed", () -> hookBooleanReturn(
-                controlUtils, "checkAppSwitchAllowed", pkgFromFirstArg(), true));
+        Class<?> immersiveModeManager = findClassQuietly(lp,
+                "com.bytedance.nativeshell.appmanager.action.ImmersiveModeManager");
+        if (immersiveModeManager != null) {
+            hook("ImmersiveModeManager.onAllowStartApp", () -> hookBooleanReturn(
+                    immersiveModeManager, "onAllowStartApp", pkgFromFirstArgOrLaunch(), true));
+            hook("ImmersiveModeManager.showImmersiveTips", () -> hookVoidReturn(
+                    immersiveModeManager, "showImmersiveTips"));
+        }
 
-        // Void display-tip methods have no return value, so suppressing is a safe no-return
-        // override. Only exact void overloads matching the configured dock package run.
-        hook("AppManagerService.showImmersiveTips", () -> hookVoidReturn(
-                appManagerService, "showImmersiveTips"));
-        hook("ImmersiveModeManager.showImmersiveTips", () -> hookVoidReturn(
-                immersiveModeManager, "showImmersiveTips"));
+        Class<?> activityStarterControl = findClassQuietly(lp,
+                "com.bytedance.nativeshell.appmanager.ActivityStarterControl");
+        if (activityStarterControl != null) {
+            hook("ActivityStarterControl.checkAppSwitchAllowed", () -> hookBooleanReturn(
+                    activityStarterControl, "checkAppSwitchAllowed", pkgFromFirstArgOrLaunch(), true));
+        }
+
+        Class<?> controlUtils = findClassQuietly(lp,
+                "com.bytedance.nativeshell.appmanager.util.ActivityStarterControlUtils");
+        if (controlUtils != null) {
+            hook("ActivityStarterControlUtils.checkAppSwitchAllowed", () -> hookBooleanReturn(
+                    controlUtils, "checkAppSwitchAllowed", pkgFromFirstArgOrLaunch(), true));
+        }
+    }
+
+    /** Resolves an optional firmware class, returning null instead of throwing when absent. */
+    private static Class<?> findClassQuietly(XC_LoadPackage.LoadPackageParam lp, String name) {
+        try {
+            return XposedHelpers.findClass(name, lp.classLoader);
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     private interface PackageProvider {
