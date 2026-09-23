@@ -14,6 +14,11 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: gradle
-      - uses: android-actions/setup-android@v3
+      # No android-actions/setup-android here: the runner image already ships the SDK at
+      # ANDROID_HOME, and that action installs the "tools" package, which newer
+      # cmdline-tools no longer ship, so the step fails before Gradle ever runs.
       - name: Build, lint, and test
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: ./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
