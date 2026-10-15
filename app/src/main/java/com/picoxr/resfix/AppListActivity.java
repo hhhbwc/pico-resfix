@@ -352,6 +352,12 @@ public class AppListActivity extends AppCompatActivity {
                 return String.valueOf(a.label).compareToIgnoreCase(String.valueOf(b.label));
             });
 
+            // Pinned first row: keyboard-display resolution + default-IME keep-alive.
+            Config.AppEntry imeEntry = new Config.AppEntry();
+            imeEntry.pkg = "@ime";
+            imeEntry.label = getString(R.string.ime_entry_label);
+            result.add(0, imeEntry);
+
             handler.post(() -> {
                 if (!isAlive(generation)) return;
                 glob = currentGlob;
@@ -389,6 +395,58 @@ public class AppListActivity extends AppCompatActivity {
         startActivity(i);
     }
 
+    /** Pinned "输入法" entry: pick an input method, then edit its keyboard-display config. */
+    void showImePicker() {
+        PackageManager pm = getPackageManager();
+        List<android.content.pm.ResolveInfo> services;
+        try {
+            services = pm.queryIntentServices(
+                    new Intent("android.view.InputMethod"), PackageManager.GET_META_DATA);
+        } catch (Throwable t) {
+            services = null;
+        }
+        if (services == null || services.isEmpty()) {
+            android.widget.Toast.makeText(this, R.string.ime_none,
+                    android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String current = defaultImeId();
+        List<String> ids = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        for (android.content.pm.ResolveInfo info : services) {
+            if (info.serviceInfo == null) continue;
+            String id = new android.content.ComponentName(
+                    info.serviceInfo.packageName, info.serviceInfo.name).flattenToShortString();
+            CharSequence label = info.loadLabel(pm);
+            ids.add(id);
+            labels.add((label != null && label.length() > 0 ? label : id)
+                    + (id.equals(current) ? getString(R.string.ime_default_marker) : ""));
+        }
+        if (ids.isEmpty()) {
+            android.widget.Toast.makeText(this, R.string.ime_none,
+                    android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.ime_picker_title)
+                .setItems(labels.toArray(new String[0]), (d, which) -> {
+                    Intent i = new Intent(AppListActivity.this, AppDetailActivity.class);
+                    i.putExtra("pkg", "@ime:" + ids.get(which));
+                    startActivity(i);
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private String defaultImeId() {
+        try {
+            return android.provider.Settings.Secure.getString(getContentResolver(),
+                    "default_input_method");
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     class AppAdapter extends RecyclerView.Adapter<AppAdapter.VH> {
         List<Config.AppEntry> apps;
 
@@ -404,6 +462,10 @@ public class AppListActivity extends AppCompatActivity {
         @Override
         public void onBindViewHolder(@NonNull VH h, int pos) {
             final Config.AppEntry e = apps.get(pos);
+            if ("@ime".equals(e.pkg)) {
+                bindImeEntry(h, e);
+                return;
+            }
             h.label.setText(e.label != null ? e.label : e.pkg);
             h.label.setSelected(true);
             h.pkg.setText(e.pkg);
@@ -499,6 +561,27 @@ public class AppListActivity extends AppCompatActivity {
                 cardDock = v.findViewById(R.id.card_dock);
                 selected = v.findViewById(R.id.cb_selected);
                 icon = v.findViewById(R.id.iv_icon); }
+        }
+
+        /** The pinned @ime card: no per-app fields, opens the input-method picker. */
+        private void bindImeEntry(VH h, Config.AppEntry e) {
+            h.label.setText(e.label);
+            h.label.setSelected(true);
+            h.pkg.setText(e.pkg);
+            h.pkg.setSelected(true);
+            h.cardSys.setVisibility(View.GONE);
+            h.cardDock.setVisibility(View.GONE);
+            h.res.setText(R.string.ime_entry_summary);
+            h.res.setTextColor(h.root.getContext().getColor(R.color.primary));
+            h.selected.setOnCheckedChangeListener(null);
+            h.selected.setVisibility(View.GONE);
+            h.selected.setChecked(false);
+            h.icon.setImageResource(android.R.drawable.ic_menu_manage);
+            h.tag = "@ime";
+            h.root.setOnClickListener(v -> {
+                if (!selectionMode) showImePicker();
+            });
+            h.root.setOnLongClickListener(null);
         }
     }
 }

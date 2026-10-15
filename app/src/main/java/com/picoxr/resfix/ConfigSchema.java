@@ -17,6 +17,11 @@ public final class ConfigSchema {
     public static final int MIN_DENSITY = 72;
     public static final int MAX_DENSITY = 1000;
 
+    /** Stock keyboard display the firmware hardcodes in InputMethodWindow. */
+    public static final int IME_BASE_WIDTH = 1045;
+    public static final int IME_BASE_HEIGHT = 460;
+    public static final int IME_BASE_DENSITY = 200;
+
     /**
      * Maximum total pixels an app may request. PICO 4 (A8110) renders about 7.2MP per
      * eye pair; anything beyond ~1.7x that cannot reliably be allocated, and the
@@ -41,6 +46,7 @@ public final class ConfigSchema {
     public static void validate(JSONObject root) throws JSONException {
         if (root == null) throw new JSONException("Configuration root is missing");
         if (root.has("default")) validateDefault(root.getJSONObject("default"));
+        if (root.has("ime")) validateIme(root.getJSONObject("ime"));
         if (!root.has("apps")) return;
         JSONObject apps = root.getJSONObject("apps");
         int count = 0;
@@ -106,6 +112,41 @@ public final class ConfigSchema {
         if (value == null) return;
         for (String key : RESOLUTION_KEYS) value.remove(key);
         if (value.length() == 0) root.remove("default");
+    }
+
+    /**
+     * The "ime" section: a per-package map ({"<pkg>": {"w","h","density"}}) plus the
+     * legacy flat shape (w/h/density directly on the section) and the optional
+     * "imeKeep" full-IME-id string naming the keep-alive target.
+     */
+    private static void validateIme(JSONObject ime) throws JSONException {
+        if (ime.has("w") || ime.has("h")) {
+            validateResolution(ime, "w", "h", "density");
+        }
+        if (ime.has("imeKeep") && !(ime.get("imeKeep") instanceof String)) {
+            throw new JSONException("imeKeep must be a string");
+        }
+        Iterator<String> keys = ime.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            if ("imeKeep".equals(key) || "w".equals(key)
+                    || "h".equals(key) || "density".equals(key)) {
+                continue;
+            }
+            Object entry = ime.opt(key);
+            if (!(entry instanceof JSONObject)) {
+                throw new JSONException("ime entries must be objects: " + key);
+            }
+            validateResolution((JSONObject) entry, "w", "h", "density");
+        }
+    }
+
+    /** Removes one IME's resolution entry; drops the whole section when nothing is left. */
+    public static void clearImeEntry(JSONObject root, String imePkg) {
+        JSONObject ime = root == null ? null : root.optJSONObject("ime");
+        if (ime == null) return;
+        ime.remove(imePkg);
+        if (ime.length() == 0) root.remove("ime");
     }
 
     private static void validateDefault(JSONObject value) throws JSONException {

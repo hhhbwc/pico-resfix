@@ -32,6 +32,15 @@ public class ResFix implements IXposedHookLoadPackage {
     private static final String CONFIG_SETTING = "pico_systemext_coord_resfix_config";
     private static final String GENERATION_SETTING = "pico_systemext_coord_resfix_generation";
 
+    /** The keyboard display: hosts the stock iFly keyboard and fcitx5 alike. */
+    static final String IME_WINDOW = "NS_INPUT_METHOD";
+    private static final String TARGET_WINDOW_CLASS =
+            "com.bytedance.nativeshell.appmanager.widget.InputMethodWindow";
+    private static final String IFLY_PKG = "com.iflytek.inputmethod.pico";
+    private static final String DEFAULT_KEEP_TARGET =
+            "org.fcitx.fcitx5.android/.input.FcitxInputMethodService";
+    private static final String KEEP_PROP = "persist.resfix.imekeep";
+
     /** Window-type constants: 2002 = near-field dock, 3002 = far-field floating. */
     private static final int WINDOW_TYPE_DOCK = 2002;
     private static final int WINDOW_TYPE_FLOATING = 3002;
@@ -419,9 +428,15 @@ public class ResFix implements IXposedHookLoadPackage {
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lp) {
-        if (!"com.picovr.systemext".equals(lp.packageName)) return;
-        installResolutionHook(lp);
-        installDockHooks(lp);
+        if ("com.picovr.systemext".equals(lp.packageName)) {
+            installResolutionHook(lp);
+            installImeCreationHook(lp);
+            installImeShowHook(lp);
+            installSystemExtKeepAlive(lp);
+            installDockHooks(lp);
+        } else if ("android".equals(lp.packageName) && "android".equals(lp.processName)) {
+            installSystemServerKeepAlive(lp);
+        }
     }
 
     private static void installResolutionHook(XC_LoadPackage.LoadPackageParam lp) {
@@ -468,6 +483,301 @@ public class ResFix implements IXposedHookLoadPackage {
             log("failed to install resolution hook", t);
         }
         installAppRecordFix(lp);
+    }
+
+    // ------------------------------------------------------------------
+    // Keyboard display (NS_INPUT_METHOD): creation-time resolution override
+    // ------------------------------------------------------------------
+
+    /**
+     * InputMethodWindow (the keyboard host) calls the six-argument overload directly; the
+     * five-argument overload used by regular app windows never sees the keyboard display.
+     *
+     * <p>The keyboard display is created once, before the default IME settles, so the
+     * per-IME configuration of the keep-alive target (fcitx5) wins: that is the keyboard
+     * the display will actually host. There is deliberately no runtime resize - resizing
+     * an already-created keyboard display leaves the window/surface chain at the creation
+     * size and the keyboard renders clipped, so resolution changes apply at next boot.
+     */
+    private static void installImeCreationHook(XC_LoadPackage.LoadPackageParam lp) {
+        try {
+            Class<?> appContainer = XposedHelpers.findClass(
+                    "com.bytedance.nativeshell.appmanager.AppContainer", lp.classLoader);
+            XposedHelpers.findAndHookMethod(appContainer, "createVirtualDisplay",
+                    String.class, int.class, int.class, int.class, int.class, boolean.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            try {
+                                String name = (String) param.args[0];
+                                if (!IME_WINDOW.equals(name)) return;
+                                Cfg cfg = imeConfig();
+                                if (cfg == null) return;
+
+                                param.args[1] = cfg.w;
+                                param.args[2] = cfg.h;
+                                param.args[3] = cfg.density;
+                                setInt(param.thisObject, "mWidth", cfg.w, true);
+                                setInt(param.thisObject, "mHeight", cfg.h, true);
+                                setInt(param.thisObject, "mDensity", cfg.density, false);
+
+                                String route = cfg.w + "x" + cfg.h + "@" + cfg.density;
+                                if (!route.equals(lastRoute.put(IME_WINDOW, route))) {
+                                    XposedBridge.log(TAG + ": route " + IME_WINDOW + " -> " + route);
+                                }
+                            } catch (Throwable t) {
+                                log("keyboard display hook failed", t);
+                            }
+                        }
+                    });
+        } catch (Throwable t) {
+            log("failed to install keyboard display hook", t);
+        }
+    }
+
+    /**
+     * Resolution override for the keyboard display, resolved once at creation.
+     * Accepts a per-IME map ({"ime": {"<pkg>": {"w","h","density"}}}) and the legacy
+     * flat shape ({"ime": {"w","h","density"}}). The keep-alive target's entry wins
+     * over the current default's (early-boot reads cannot tell them apart anyway), and
+     * density scales with the resolution unless configured explicitly.
+     */
+    private static Cfg imeConfig() {
+        JSONObject ime = configSnapshot().root.optJSONObject("ime");
+        if (ime == null) return null;
+        JSONObject value = null;
+        String keepPkg = pkgOfImeId(keepAliveTarget());
+        if (keepPkg != null) value = ime.optJSONObject(keepPkg);
+        if (value == null) {
+            String pkg = defaultImePackage();
+            if (pkg != null) value = ime.optJSONObject(pkg);
+        }
+        if (value == null && (ime.has("w") || ime.has("h"))) value = ime;
+        if (value == null) return null;
+        try {
+            int w = value.getInt("w");
+            int h = value.getInt("h");
+            if (!ConfigSchema.isResolutionValid(w, h)) return null;
+            int density = value.has("density") ? value.getInt("density")
+                    : Math.round((float) ConfigSchema.IME_BASE_DENSITY * w / ConfigSchema.IME_BASE_WIDTH);
+            if (!ConfigSchema.isDensityValid(density)) return null;
+            return new Cfg(w, h, density, true, false);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Default-IME keep-alive
+    // ------------------------------------------------------------------
+
+    /** systemext: NativeShell also rewrites the default IME secure setting directly. */
+    private static void installSystemExtKeepAlive(final XC_LoadPackage.LoadPackageParam lp) {
+        try {
+            Class<?> secure = XposedHelpers.findClass(
+                    "android.provider.Settings$Secure", lp.classLoader);
+            XC_MethodHook guard = new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    if (!keepAliveEnabled()) return;
+                    int valueIndex = -1;
+                    for (int i = 0; i < param.args.length; i++) {
+                        if ("default_input_method".equals(param.args[i])) {
+                            valueIndex = i + 1;
+                            break;
+                        }
+                    }
+                    if (valueIndex < 0 || valueIndex >= param.args.length) return;
+                    String requested = param.args[valueIndex] instanceof String
+                            ? (String) param.args[valueIndex] : null;
+                    if (!isIflyIme(requested)) return;
+                    String target = keepAliveTarget();
+                    if (requested.equals(target)) return;
+                    param.args[valueIndex] = target;
+                    XposedBridge.log(TAG + ": keepalive systemext write " + target);
+                }
+            };
+            XposedHelpers.findAndHookMethod(secure, "putStringForUser",
+                    android.content.ContentResolver.class, String.class, String.class,
+                    int.class, guard);
+            XposedHelpers.findAndHookMethod(secure, "putStringForUser",
+                    android.content.ContentResolver.class, String.class, String.class,
+                    String.class, boolean.class, int.class, guard);
+        } catch (Throwable t) {
+            log("failed to install systemext keepalive hook", t);
+        }
+    }
+
+    /**
+     * Keyboard show is the keep-alive heartbeat: if the default drifted back to iFly,
+     * write the configured keyboard back (uid 1000 can write secure settings; IMMS's
+     * settings observer picks the change up and switches). No resolution work happens
+     * here - the display resolution only changes at creation (boot).
+     */
+    private static void installImeShowHook(XC_LoadPackage.LoadPackageParam lp) {
+        try {
+            Class<?> appContainer = XposedHelpers.findClass(
+                    "com.bytedance.nativeshell.appmanager.AppContainer", lp.classLoader);
+            Class<?> window = XposedHelpers.findClass(TARGET_WINDOW_CLASS, lp.classLoader);
+            XposedHelpers.findAndHookMethod(window, "showInputMethod",
+                    appContainer, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            keepDefaultImePinned();
+                        }
+                    });
+        } catch (Throwable t) {
+            log("failed to install keyboard show hook", t);
+        }
+    }
+
+    /** Writes the keep-alive target back as default when the setting drifted to iFly. */
+    private static void keepDefaultImePinned() {
+        try {
+            String current = defaultImePackage();
+            if (current == null || !isIflyIme(current)) return;
+            String target = keepAliveTarget();
+            if (target.equals(current)) return;
+            Class<?> secure = XposedHelpers.findClass("android.provider.Settings$Secure", null);
+            Object resolver = systemContentResolver();
+            if (resolver == null) return;
+            XposedHelpers.callStaticMethod(secure, "putStringForUser",
+                    resolver, "default_input_method", target, 0);
+            XposedBridge.log(TAG + ": keepalive re-pinned default -> " + target);
+        } catch (Throwable t) {
+            log("keepDefaultImePinned failed", t);
+        }
+    }
+
+    /**
+     * system_server hooks: every reversion of the default IME to iFly is redirected to the
+     * configured keyboard. Covers IMMS activation, persisted selection and the enabled-list
+     * rewrite, which are the three paths PICO uses to push iFly back.
+     */
+    private static void installSystemServerKeepAlive(XC_LoadPackage.LoadPackageParam lp) {
+        final Class<?> imms, settings;
+        try {
+            imms = XposedHelpers.findClass(
+                    "com.android.server.inputmethod.InputMethodManagerService", lp.classLoader);
+            settings = XposedHelpers.findClass(
+                    "com.android.server.inputmethod.InputMethodUtils$InputMethodSettings",
+                    lp.classLoader);
+        } catch (Throwable t) {
+            log("keepalive: failed to resolve IMMS classes", t);
+            return;
+        }
+
+        hook("keepalive IMMS.setInputMethodLocked", () -> XposedHelpers.findAndHookMethod(
+                imms, "setInputMethodLocked", String.class, int.class, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (!keepAliveEnabled()) return;
+                        String requested = param.args[0] instanceof String
+                                ? (String) param.args[0] : null;
+                        if (!isIflyIme(requested)) return;
+                        String target = keepAliveTarget();
+                        if (requested.equals(target)) return;
+                        if (!imeInstalled(param.thisObject, target)) return;
+                        param.args[0] = target;
+                        XposedBridge.log(TAG + ": keepalive " + requested + " -> " + target);
+                    }
+                }));
+
+        hook("keepalive putSelectedInputMethod", () -> XposedHelpers.findAndHookMethod(
+                settings, "putSelectedInputMethod", String.class, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (!keepAliveEnabled()) return;
+                        String requested = param.args[0] instanceof String
+                                ? (String) param.args[0] : null;
+                        if (!isIflyIme(requested)) return;
+                        String target = keepAliveTarget();
+                        if (requested.equals(target)) return;
+                        param.args[0] = target;
+                        XposedBridge.log(TAG + ": keepalive persisted default " + target);
+                    }
+                }));
+
+        hook("keepalive putEnabledInputMethodsStr", () -> XposedHelpers.findAndHookMethod(
+                settings, "putEnabledInputMethodsStr", String.class, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (!keepAliveEnabled()) return;
+                        String target = keepAliveTarget();
+                        String enabled = param.args[0] instanceof String
+                                ? (String) param.args[0] : "";
+                        if (enabled.contains(target)) return;
+                        param.args[0] = enabled.isEmpty() ? target : enabled + ":" + target;
+                        XposedBridge.log(TAG + ": keepalive kept enabled: " + target);
+                    }
+                }));
+    }
+
+    /** Current default keyboard's package name, e.g. "org.fcitx.fcitx5.android". */
+    static String defaultImePackage() {
+        try {
+            Object resolver = systemContentResolver();
+            if (resolver == null) return null;
+            Class<?> secure = XposedHelpers.findClass("android.provider.Settings$Secure", null);
+            Object value = XposedHelpers.callStaticMethod(secure, "getString",
+                    resolver, "default_input_method");
+            if (!(value instanceof String) || ((String) value).isEmpty()) return null;
+            return pkgOfImeId((String) value);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static Object systemContentResolver() {
+        try {
+            Context context = systemContext();
+            return context == null ? null : context.getContentResolver();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static String keepAliveTarget() {
+        try {
+            JSONObject ime = configSnapshot().root.optJSONObject("ime");
+            if (ime != null) {
+                String configured = ime.optString("imeKeep", "");
+                if (!configured.isEmpty() && configured.contains("/")) return configured;
+            }
+        } catch (Throwable ignored) {}
+        return DEFAULT_KEEP_TARGET;
+    }
+
+    private static boolean keepAliveEnabled() {
+        try {
+            Class<?> sp = Class.forName("android.os.SystemProperties");
+            Object v = sp.getMethod("get", String.class, String.class)
+                    .invoke(null, KEEP_PROP, "1");
+            return !"0".equals(v);
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    private static boolean isIflyIme(String imeId) {
+        return imeId != null && imeId.startsWith(IFLY_PKG + "/");
+    }
+
+    /** "pkg/..." -> "pkg"; anything without a slash returns as-is. */
+    private static String pkgOfImeId(String imeId) {
+        if (imeId == null) return null;
+        int slash = imeId.indexOf('/');
+        return slash > 0 ? imeId.substring(0, slash) : imeId;
+    }
+
+    /** True when the redirect target exists in the IMMS method map (avoids dead redirects). */
+    private static boolean imeInstalled(Object imms, String imeId) {
+        try {
+            Object map = XposedHelpers.getObjectField(imms, "mMethodMap");
+            return map instanceof java.util.Map && ((java.util.Map<?, ?>) map).containsKey(imeId);
+        } catch (Throwable t) {
+            return true;
+        }
     }
 
     private static void installAppRecordFix(XC_LoadPackage.LoadPackageParam lp) {

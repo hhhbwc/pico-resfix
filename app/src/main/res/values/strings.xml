@@ -58,4 +58,13 @@
     <string name="batch_import_rejected">Nothing valid to import</string>
     <!-- Shown instead of a resolution when nothing is actually being applied to this app. -->
     <string name="res_follow_system">Follow system</string>
+
+    <!-- Pinned input-method entry (keyboard display resolution + keep-alive) -->
+    <string name="ime_entry_label">Input methods</string>
+    <string name="ime_entry_summary">Keyboard resolution · keep-alive</string>
+    <string name="ime_picker_title">Select an input method</string>
+    <string name="ime_default_marker"> (current default)</string>
+    <string name="ime_none">No input method installed</string>
+    <string name="ime_saved_toast">Saved. Reboot the headset to apply</string>
+    <string name="ime_removed_toast">Removed. Reboot the headset to apply</string>
 </resources>

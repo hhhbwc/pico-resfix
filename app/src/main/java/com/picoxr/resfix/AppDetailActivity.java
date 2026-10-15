@@ -47,6 +47,9 @@ public class AppDetailActivity extends AppCompatActivity {
     public static final String EXTRA_BATCH_PACKAGES = "batch_packages";
     String pkg;
     ArrayList<String> batchPackages;
+    /** Non-null in IME mode: the input method package being configured (pkg = "@ime:<id>"). */
+    String imePkg;
+    String imeId;
     TextView tvTitle, tvPkg, tvEnableLabel, tvDockLabel, tvDensityLabel;
     ImageView ivIcon;
     MaterialSwitch swEnable, swDock;
@@ -75,12 +78,30 @@ public class AppDetailActivity extends AppCompatActivity {
     final String[] resFloatArr = {"1280 × 722","1600 × 902","1920 × 1082","2560 × 1442","3840 × 2162"};
     final String[] resDockArr = {"807 × 432","1127 × 752","1447 × 1072","1767 × 1392","2087 × 1712"};
 
+    /** 1x / 1.5x / 2x / 3x on the stock 1045x460 keyboard display. */
+    private static final int[][] IME_PRESETS = {
+            {1045, 460}, {1568, 690}, {2090, 920}, {3135, 1380}
+    };
+
+    private String[] imePresetItems() {
+        String[] items = new String[IME_PRESETS.length + 1];
+        items[0] = getString(R.string.select_preset);
+        for (int i = 0; i < IME_PRESETS.length; i++) {
+            items[i + 1] = IME_PRESETS[i][0] + " × " + IME_PRESETS[i][1];
+        }
+        return items;
+    }
+
     @Override
     protected void onCreate(Bundle b) {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
         super.onCreate(b);
         setContentView(R.layout.activity_detail);
         pkg = getIntent().getStringExtra("pkg");
+        if (pkg != null && pkg.startsWith("@ime:")) {
+            imeId = pkg.substring("@ime:".length());
+            imePkg = pkgOfImeId(imeId);
+        }
         batchPackages = getIntent().getStringArrayListExtra(EXTRA_BATCH_PACKAGES);
         boolean isBatch = isBatchMode();
 
@@ -123,6 +144,17 @@ public class AppDetailActivity extends AppCompatActivity {
             tvPkg.setText(R.string.default_cfg);
             ivIcon.setImageResource(R.mipmap.ic_launcher);
             btnSaveAndApply.setVisibility(View.GONE);
+        } else if (imePkg != null) {
+            tvPkg.setText(imePkg);
+            try {
+                PackageManager pm = getPackageManager();
+                ApplicationInfo ai = pm.getApplicationInfo(imePkg, 0);
+                tvTitle.setText(pm.getApplicationLabel(ai));
+                ivIcon.setImageDrawable(pm.getApplicationIcon(ai));
+            } catch (Exception e) {
+                tvTitle.setText(R.string.detail_title);
+                ivIcon.setImageResource(android.R.drawable.sym_def_app_icon);
+            }
         } else {
             tvPkg.setText(pkg);
             try {
@@ -177,6 +209,34 @@ public class AppDetailActivity extends AppCompatActivity {
             }
             @Override public void onNothingSelected(AdapterView<?> parent) {}
         });
+
+        if (imePkg != null) {
+            // IME mode: keyboard-display resolution only. One preset row, no dock/swap,
+            // no density field (density scales with the resolution automatically), and
+            // the change applies at next boot - resizing a live display clips the keyboard.
+            cardDock.setVisibility(View.GONE);
+            cardEnable.setVisibility(View.GONE);
+            spPresetSwap.setVisibility(View.GONE);
+            btnSwapVal.setVisibility(View.GONE);
+            ((View) etDensity.getParent().getParent().getParent()).setVisibility(View.GONE);
+
+            ArrayAdapter<String> imeAdapter = new ArrayAdapter<>(this,
+                    android.R.layout.simple_spinner_item, imePresetItems());
+            imeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            spPreset.setAdapter(imeAdapter);
+            // The stock preset listener indexes resFloatArr; this spinner now carries the
+            // IME presets, so map the selected row into IME_PRESETS instead.
+            spPreset.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+                @Override
+                public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                    if (position > 0 && position - 1 < IME_PRESETS.length) {
+                        etW.setText(String.valueOf(IME_PRESETS[position - 1][0]));
+                        etH.setText(String.valueOf(IME_PRESETS[position - 1][1]));
+                    }
+                }
+                @Override public void onNothingSelected(AdapterView<?> parent) {}
+            });
+        }
 
         loadCurrent();
         cardEnable.setOnClickListener(v -> swEnable.toggle());
@@ -248,7 +308,9 @@ public class AppDetailActivity extends AppCompatActivity {
         loaded.dock = selectedDock;
         try {
             JSONObject root = Config.readRoot();
-            if (TextUtils.isEmpty(targetPkg)) {
+            if (imePkg != null) {
+                loaded.target = Config.imeObj(root).optJSONObject(imePkg);
+            } else if (TextUtils.isEmpty(targetPkg)) {
                 loaded.target = Config.defaultObj(root);
             } else {
                 JSONObject apps = Config.appsObj(root);
@@ -279,6 +341,24 @@ public class AppDetailActivity extends AppCompatActivity {
             etDensity.setText("");
             swEnable.setChecked(true);
             swDock.setChecked(false);
+            setInputsEnabled(true);
+            loadingCurrent = false;
+            return;
+        }
+
+        if (imePkg != null) {
+            JSONObject target = loaded.target;
+            if (target != null) {
+                etW.setText(String.valueOf(target.optInt("w", ConfigSchema.IME_BASE_WIDTH)));
+                etH.setText(String.valueOf(target.optInt("h", ConfigSchema.IME_BASE_HEIGHT)));
+            } else {
+                etW.setText(String.valueOf(ConfigSchema.IME_BASE_WIDTH));
+                etH.setText(String.valueOf(ConfigSchema.IME_BASE_HEIGHT));
+            }
+            etDensity.setText("");
+            spPreset.setSelection(0);
+            spPresetSwap.setSelection(0);
+            swEnable.setChecked(true);
             setInputsEnabled(true);
             loadingCurrent = false;
             return;
@@ -352,6 +432,9 @@ public class AppDetailActivity extends AppCompatActivity {
                 if (batch) {
                     int density = parseOptionalDensity(densityText);
                     ok = Config.applyBatchSettings(targets, w, h, density, enable, dock);
+                } else if (imePkg != null) {
+                    final int fw = w, fh = h;
+                    ok = Config.updateRoot(root -> writeImeEntry(root, fw, fh));
                 } else {
                     ok = Config.updateRoot(root -> writeEntry(root, targetPkg, enable, dock,
                             w, h, densityText));
@@ -394,11 +477,23 @@ public class AppDetailActivity extends AppCompatActivity {
         else target.remove(pfx + "density");
     }
 
+    /** IME mode save: write {"w","h"} under ime[<pkg>]; density scales from the width. */
+    private void writeImeEntry(JSONObject root, int w, int h) throws Exception {
+        JSONObject ime = Config.ensureImeObj(root);
+        JSONObject entry = new JSONObject();
+        entry.put("w", w);
+        entry.put("h", h);
+        ime.put(imePkg, entry);
+        root.put("ime", ime);
+    }
+
     private void onSaveFinished(boolean ok, boolean batch, List<String> targets,
             String targetPkg, boolean applyAfterSaving) {
-        String message = batch
-                ? getString(ok ? R.string.batch_updated : R.string.write_failed, targets.size())
-                : getString(ok ? R.string.saved_toast : R.string.write_failed);
+        String message = imePkg != null
+                ? getString(ok ? R.string.ime_saved_toast : R.string.write_failed)
+                : batch
+                        ? getString(ok ? R.string.batch_updated : R.string.write_failed, targets.size())
+                        : getString(ok ? R.string.saved_toast : R.string.write_failed);
         Toast.makeText(this, message, Toast.LENGTH_LONG).show();
         if (!ok) {
             setInputsEnabled(true);
@@ -406,7 +501,7 @@ public class AppDetailActivity extends AppCompatActivity {
             btnSaveAndApply.setEnabled(true);
             return;
         }
-        if (applyAfterSaving) {
+        if (applyAfterSaving && imePkg == null) {
             if (batch) restartAppsAsync(targets);
             else if (!TextUtils.isEmpty(targetPkg)) {
                 restartAppsAsync(Collections.singletonList(targetPkg));
@@ -429,7 +524,9 @@ public class AppDetailActivity extends AppCompatActivity {
         btnRemove.setEnabled(false);
         ioExecutor.execute(() -> {
             boolean ok = Config.updateRoot(root -> {
-                if (!TextUtils.isEmpty(targetPkg)) {
+                if (imePkg != null) {
+                    ConfigSchema.clearImeEntry(root, imePkg);
+                } else if (!TextUtils.isEmpty(targetPkg)) {
                     JSONObject apps = Config.appsObj(root);
                     apps.remove(targetPkg);
                     root.put("apps", apps);
@@ -442,7 +539,9 @@ public class AppDetailActivity extends AppCompatActivity {
             });
             final boolean removed = ok;
             runOnUiThread(() -> {
-                Toast.makeText(this, getString(removed ? R.string.remove_toast : R.string.write_failed),
+                Toast.makeText(this, getString(removed
+                                ? (imePkg != null ? R.string.ime_removed_toast : R.string.remove_toast)
+                                : R.string.write_failed),
                         Toast.LENGTH_LONG).show();
                 if (removed) finish();
                 else btnRemove.setEnabled(true);
@@ -456,6 +555,12 @@ public class AppDetailActivity extends AppCompatActivity {
     }
     private boolean isBatchMode() {
         return batchPackages != null && !batchPackages.isEmpty();
+    }
+
+    /** "pkg/..." -> "pkg"; anything without a slash returns as-is. */
+    private static String pkgOfImeId(String imeId) {
+        int slash = imeId.indexOf('/');
+        return slash > 0 ? imeId.substring(0, slash) : imeId;
     }
 
     private void showBatchAppsPopup(View anchor) {

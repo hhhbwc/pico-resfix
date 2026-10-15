@@ -134,6 +134,23 @@ public final class Config {
         }
     }
 
+    public static JSONObject imeObj(JSONObject root) {
+        try {
+            if (root.has("ime")) return root.getJSONObject("ime");
+        } catch (Throwable t) {}
+        return new JSONObject();
+    }
+
+    public static JSONObject ensureImeObj(JSONObject root) {
+        try {
+            JSONObject ime = imeObj(root);
+            root.put("ime", ime);
+            return ime;
+        } catch (Throwable t) {
+            return new JSONObject();
+        }
+    }
+
     public interface RootMutation {
         void apply(JSONObject root) throws Exception;
     }
