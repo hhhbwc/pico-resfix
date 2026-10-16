@@ -61,6 +61,8 @@
 
     <!-- Keyboard filter: input methods shown with their keyboard-display resolution -->
     <string name="filter_ime">Keyboard</string>
+    <string name="ime_adapted"> (adapted)</string>
+    <string name="ime_not_adapted"> (not adapted)</string>
     <string name="ime_saved_toast">Saved. Reboot the headset to apply</string>
     <string name="ime_removed_toast">Removed. Reboot the headset to apply</string>
 </resources>

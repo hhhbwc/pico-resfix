@@ -57,6 +57,8 @@
     <string name="res_follow_system">跟随系统</string>
     <!-- 键盘筛选：输入法条目展示键盘屏分辨率 -->
     <string name="filter_ime">键盘</string>
+    <string name="ime_adapted">（已适配）</string>
+    <string name="ime_not_adapted">（未适配）</string>
     <string name="ime_saved_toast">已保存，重启头显后生效</string>
     <string name="ime_removed_toast">已移除，重启头显后生效</string>
 </resources>

@@ -34,11 +34,11 @@ Implemented by injecting into `com.picovr.systemext` using **Zygisk Vector (LSPo
 
 ---
 
-### Input method (keyboard display, v1.4.2-ime.4)
+### Input method (keyboard display, v1.4.2-ime.5)
 
 The keyboard has a dedicated virtual display (`NS_INPUT_METHOD`, hardcoded 1045×460 @ 200 dpi). This module unlocks it too:
 
-- A pinned **Input methods** row at the top of the app list → pick an installed IME (the current default is marked) → per-IME resolution with 1x / 1.5x / 2x / 3x presets (1045×460 / 1568×690 / 2090×920 / 3135×1380; density scales with the resolution automatically).
+- A **Keyboard** filter button (next to Modified / User / System / VR) lists every installed IME with its keyboard-display resolution; tap one to edit it with 1x / 1.5x / 2x / 3x presets (1045×460 / 1568×690 / 2090×920 / 3135×1380; density scales with the resolution automatically).
 - The resolution is applied when the keyboard display is **created at boot**: inside the `"ime"` config section, the entry of the keep-alive target (`fcitx5` by default, configurable via the `"imeKeep"` key) wins over the current default IME's entry. **Changes require a headset reboot** — resizing a live keyboard display leaves the window/surface chain at the creation size and clips the keyboard.
 - The default-IME keep-alive is built in as well (three layers redirecting PICO's writes of `default_input_method` back to the stock keyboard; `persist.resfix.imekeep=0` disables it).
 

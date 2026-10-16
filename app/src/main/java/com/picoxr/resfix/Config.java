@@ -313,6 +313,9 @@ public final class Config {
         return out;
     }
 
+    /** The only input method this project's keyboard adaptations (height auto-fit, keep-alive) target. */
+    public static final String ADAPTED_IME_PKG = "org.fcitx.fcitx5.android";
+
     public static List<AppEntry> listImes(Context ctx, JSONObject imeObj) {
         List<AppEntry> out = new ArrayList<>();
         try {
@@ -333,7 +336,10 @@ public final class Config {
                 AppEntry e = new AppEntry();
                 e.pkg = "@ime:" + id;
                 CharSequence label = info.loadLabel(pm);
-                e.label = label != null && label.length() > 0 ? label : imePkg;
+                String base = label != null && label.length() > 0 ? label.toString() : imePkg;
+                boolean adapted = ADAPTED_IME_PKG.equals(imePkg);
+                e.label = base + ctx.getString(adapted
+                        ? R.string.ime_adapted : R.string.ime_not_adapted);
                 e.isSystem = false;
                 e.isDock = false;
                 e.hasOverride = entry != null;
