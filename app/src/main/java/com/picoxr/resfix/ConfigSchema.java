@@ -158,6 +158,7 @@ public final class ConfigSchema {
         validateBoolean(value, "showSystem");
         validateBoolean(value, "showVR");
         validateBoolean(value, "showModified");
+        validateBoolean(value, "showIme");
     }
 
     private static void validateApp(JSONObject value) throws JSONException {

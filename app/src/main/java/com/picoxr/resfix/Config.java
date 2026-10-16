@@ -51,6 +51,7 @@ public final class Config {
         public boolean floatingConfigured, dockConfigured;
         public boolean applyThird = true, applySystem = false;
         public boolean showUser = true, showSystem = false, showVR = false, showModified = true;
+        public boolean showIme = false;
     }
 
     // --- read ---
@@ -201,6 +202,7 @@ public final class Config {
             g.showSystem = d.optBoolean("showSystem", false);
             g.showVR = d.optBoolean("showVR", false);
             g.showModified = d.optBoolean("showModified", true);
+            g.showIme = d.optBoolean("showIme", false);
         } catch (Throwable ignored) {}
         return g;
     }
@@ -304,6 +306,46 @@ public final class Config {
                         e.h = e.isDock ? glob.dockHeight : glob.floatingHeight;
                         e.density = e.isDock ? glob.dockDensity : glob.floatingDensity;
                     }
+                }
+                out.add(e);
+            }
+        } catch (Throwable ignored) {}
+        return out;
+    }
+
+    public static List<AppEntry> listImes(Context ctx, JSONObject imeObj) {
+        List<AppEntry> out = new ArrayList<>();
+        try {
+            PackageManager pm = ctx.getPackageManager();
+            List<android.content.pm.ResolveInfo> services = pm.queryIntentServices(
+                    new android.content.Intent("android.view.InputMethod"),
+                    PackageManager.GET_META_DATA);
+            if (services == null) return out;
+            int flatW = imeObj == null ? 0 : imeObj.optInt("w", 0);
+            int flatH = imeObj == null ? 0 : imeObj.optInt("h", 0);
+            int flatD = imeObj == null || !imeObj.has("density") ? -1 : imeObj.optInt("density");
+            for (android.content.pm.ResolveInfo info : services) {
+                if (info.serviceInfo == null) continue;
+                String id = new android.content.ComponentName(
+                        info.serviceInfo.packageName, info.serviceInfo.name).flattenToShortString();
+                String imePkg = info.serviceInfo.packageName;
+                JSONObject entry = imeObj == null ? null : imeObj.optJSONObject(imePkg);
+                AppEntry e = new AppEntry();
+                e.pkg = "@ime:" + id;
+                CharSequence label = info.loadLabel(pm);
+                e.label = label != null && label.length() > 0 ? label : imePkg;
+                e.isSystem = false;
+                e.isDock = false;
+                e.hasOverride = entry != null;
+                if (entry != null) {
+                    e.w = entry.optInt("w", 0);
+                    e.h = entry.optInt("h", 0);
+                    e.density = entry.has("density") ? entry.optInt("density") : -1;
+                } else if (flatW > 0 && flatH > 0) {
+                    // keyboards without their own entry ride the flat "ime" section
+                    e.w = flatW;
+                    e.h = flatH;
+                    e.density = flatD;
                 }
                 out.add(e);
             }

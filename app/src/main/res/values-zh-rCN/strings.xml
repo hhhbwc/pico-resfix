@@ -55,12 +55,8 @@
     <string name="batch_import_rejected">没有可导入的有效内容</string>
     <!-- 未对该应用生效任何覆盖或全局默认值时显示 -->
     <string name="res_follow_system">跟随系统</string>
-    <!-- Pinned input-method entry (keyboard display resolution + keep-alive) -->
-    <string name="ime_entry_label">输入法</string>
-    <string name="ime_entry_summary">键盘分辨率 · 保活</string>
-    <string name="ime_picker_title">选择输入法</string>
-    <string name="ime_default_marker">（当前默认）</string>
-    <string name="ime_none">未安装输入法</string>
+    <!-- 键盘筛选：输入法条目展示键盘屏分辨率 -->
+    <string name="filter_ime">键盘</string>
     <string name="ime_saved_toast">已保存，重启头显后生效</string>
     <string name="ime_removed_toast">已移除，重启头显后生效</string>
 </resources>
