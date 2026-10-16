@@ -1,0 +1,7 @@
+{
+  "tag_name": "v1.5.0",
+  "name": "v1.5.0 — 输入法分辨率 + 默认输入法保活",
+  "body": "基于上游 v1.4.2 的功能版本：在按应用分辨率解锁之外，新增键盘专属屏支持与默认输入法保活。建议与 [fcitx5-pico](https://github.com/hhhbwc/fcitx5-pico)（fcitx5 专用：保活 + 键盘高度自适应）搭配使用。\n\n## 新增\n\n- **键盘屏（NS_INPUT_METHOD）分辨率解锁**：固件把键盘屏硬编码为 1045×460@200dpi，本模块可按输入法覆盖宽高/密度（同步 InputMethodWindow 内部字段，避免黑屏）\n  - 筛选按钮新增**「键盘」**：列出所有已安装输入法及其当前键盘屏分辨率（小企鹅标注「已适配」）\n  - 每个输入法独立配置，预设 1x / 1.5x / 2x / 3x（1045×460 / 1568×690 / 2090×920 / 3135×1380），密度随分辨率自动缩放\n  - **改动需重启头显生效**（运行中 resize 会导致键盘显示不全，实测结论）\n- **默认输入法保活**（防讯飞回切，三层）：systemext 写入守卫 / 键盘弹出纠偏 / system_server IMMS 路径；`persist.resfix.imekeep=0` 可关闭\n\n## 变更\n\n- cfg 新增 `\"ime\"` 段（按输入法映射 + 扁平旧格式 + `\"imeKeep\"` 保活目标）\n- 稳定性：ime 段 schema 严格校验（17 项健壮性测试）、保活目标安装检查、编辑器回退值修正\n\n## 安装\n\n1. 安装 APK\n2. 在 Vector 中启用，作用域勾选 `com.picovr.systemext`、`android`\n3. 重启头显\n\n## 许可证\n\n沿用上游许可证。\n",
+  "draft": false,
+  "prerelease": false
+}

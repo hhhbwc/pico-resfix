@@ -7,7 +7,7 @@ Allows **per-app configuration** of 2D virtual display resolution (no longer loc
 
 Implemented by injecting into `com.picovr.systemext` using **Zygisk Vector (LSPosed compatible framework)** — no system APK replacement required.
 
-**Current release: v1.4.2**
+**Current release: v1.5.0**
 
 ---
 
