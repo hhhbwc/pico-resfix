@@ -133,6 +133,9 @@ public final class ConfigSchema {
                     || "h".equals(key) || "density".equals(key)) {
                 continue;
             }
+            if (key == null || key.trim().isEmpty()) {
+                throw new JSONException("ime entries need a package name");
+            }
             Object entry = ime.opt(key);
             if (!(entry instanceof JSONObject)) {
                 throw new JSONException("ime entries must be objects: " + key);

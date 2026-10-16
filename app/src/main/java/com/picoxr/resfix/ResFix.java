@@ -638,6 +638,7 @@ public class ResFix implements IXposedHookLoadPackage {
             if (current == null || !isIflyIme(current)) return;
             String target = keepAliveTarget();
             if (target.equals(current)) return;
+            if (!targetInstalled()) return;
             Class<?> secure = XposedHelpers.findClass("android.provider.Settings$Secure", null);
             Object resolver = systemContentResolver();
             if (resolver == null) return;
@@ -768,6 +769,18 @@ public class ResFix implements IXposedHookLoadPackage {
         if (imeId == null) return null;
         int slash = imeId.indexOf('/');
         return slash > 0 ? imeId.substring(0, slash) : imeId;
+    }
+
+    /** True when the keep-alive target is still installed; unverifiable counts as installed. */
+    private static boolean targetInstalled() {
+        try {
+            Context context = systemContext();
+            if (context == null) return true;
+            context.getPackageManager().getApplicationInfo(pkgOfImeId(keepAliveTarget()), 0);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     /** True when the redirect target exists in the IMMS method map (avoids dead redirects). */

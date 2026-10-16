@@ -419,8 +419,10 @@ public class AppDetailActivity extends AppCompatActivity {
 
         ioExecutor.execute(() -> {
             Config.GlobalCfg glob = Config.getGlobal();
-            int defW = dock ? glob.dockWidth : glob.floatingWidth;
-            int defH = dock ? glob.dockHeight : glob.floatingHeight;
+            int defW = imePkg != null ? ConfigSchema.IME_BASE_WIDTH
+                    : (dock ? glob.dockWidth : glob.floatingWidth);
+            int defH = imePkg != null ? ConfigSchema.IME_BASE_HEIGHT
+                    : (dock ? glob.dockHeight : glob.floatingHeight);
             int w = parseInt(widthText, defW);
             int h = parseInt(heightText, defH);
             if (!ConfigSchema.isResolutionValid(w, h)) {
