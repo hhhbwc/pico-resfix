@@ -7,7 +7,7 @@
 
 用 **Zygisk Vector (LSPosed 兼容框架)** 注入 `com.picovr.systemext` 实现 —— 无需替换系统 APK。
 
-**当前版本：v1.4.2**
+**当前版本：v1.5.0**
 
 ---
 

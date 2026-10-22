@@ -2,6 +2,13 @@
 
 Release versions follow Android `versionName` and the matching Git tag.
 
+## v1.5.0
+
+Feature release: per-IME keyboard-screen (`NS_INPUT_METHOD`) resolution unlock and default-IME
+keep-alive. The full change list is in the
+[v1.5.0 release notes](https://github.com/hhhbwc/pico-resfix/releases/tag/v1.5.0);
+this build is published as `resfix-v1.5.0.apk`.
+
 ## v1.4.2
 
 A maintenance release that fixes bugs found while auditing the module after v1.4.1.
