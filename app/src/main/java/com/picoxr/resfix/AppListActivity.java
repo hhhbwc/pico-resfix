@@ -86,6 +86,7 @@ public class AppListActivity extends AppCompatActivity {
 
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
+        com.picoxr.resfix.utils.HapticUtils.attachHapticToToolbar(toolbar);
 
         recycler = findViewById(R.id.recycler);
         status = findViewById(R.id.status);
@@ -94,6 +95,8 @@ public class AppListActivity extends AppCompatActivity {
         fabBatchEdit = findViewById(R.id.fab_batch_edit);
         etSearch = findViewById(R.id.et_search);
         ivClearSearch = findViewById(R.id.iv_clear_search);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(etSearch);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(ivClearSearch);
         // Restored defaults; readPrefs() replaces them once the root-backed read returns.
         showUser = true;
         showSystem = false;
@@ -132,6 +135,10 @@ public class AppListActivity extends AppCompatActivity {
             }
             @Override public void afterTextChanged(Editable s) {}
         });
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(fabDefault);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(fabBatch);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(fabBatchEdit);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(ivClearSearch);
     }
 
     /**
@@ -169,6 +176,12 @@ public class AppListActivity extends AppCompatActivity {
             MaterialButton btnIme = actionView.findViewById(R.id.btn_filter_ime);
 
             renderFilterButtons(actionView);
+
+            com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(btnMod);
+            com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(btnUser);
+            com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(btnSys);
+            com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(btnVR);
+            com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(btnIme);
 
             btnMod.setOnClickListener(v -> {
                 if (showModified && !showUser && !showSystem && !showVR && !showIme) return;
@@ -234,7 +247,8 @@ public class AppListActivity extends AppCompatActivity {
         EditText input = new EditText(this);
         input.setMinLines(8);
         input.setHint("{\n  \"apps\": {\n    \"com.example.app\": {\"w\":1920,\"h\":1080,\"density\":240,\"dock\":true}\n  }\n}");
-        new AlertDialog.Builder(this)
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(input);
+        AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(R.string.batch_import_title)
                 .setMessage(R.string.batch_import_message)
                 .setView(input)
@@ -253,6 +267,7 @@ public class AppListActivity extends AppCompatActivity {
                 // Cancelling the dialog must leave the current multi-selection untouched.
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
+        com.picoxr.resfix.utils.HapticUtils.attachHapticToDialog(dialog);
     }
 
     private String importMessage(Config.BatchImportResult outcome) {
@@ -293,6 +308,7 @@ public class AppListActivity extends AppCompatActivity {
 
     @Override
     public void onBackPressed() {
+        com.picoxr.resfix.utils.HapticUtils.triggerHaptic(false, 0);
         if (selectionMode) {
             exitSelectionMode();
             return;
@@ -413,6 +429,7 @@ public class AppListActivity extends AppCompatActivity {
         @Override
         public VH onCreateViewHolder(@NonNull ViewGroup parent, int t) {
             View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_app, parent, false);
+            com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(v);
             return new VH(v);
         }
 

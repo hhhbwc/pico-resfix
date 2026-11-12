@@ -110,6 +110,7 @@ public class AppDetailActivity extends AppCompatActivity {
         if (getSupportActionBar() != null) {
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
         }
+        com.picoxr.resfix.utils.HapticUtils.attachHapticToToolbar(toolbar);
 
         tvTitle = findViewById(R.id.tv_title);
         tvPkg = findViewById(R.id.tv_pkg);
@@ -125,6 +126,9 @@ public class AppDetailActivity extends AppCompatActivity {
         etW = findViewById(R.id.et_w);
         etH = findViewById(R.id.et_h);
         etDensity = findViewById(R.id.et_density);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(etW);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(etH);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(etDensity);
         btnSave = findViewById(R.id.btn_save);
         btnSaveAndApply = findViewById(R.id.btn_save_and_apply);
         btnRemove = findViewById(R.id.btn_remove);
@@ -184,6 +188,7 @@ public class AppDetailActivity extends AppCompatActivity {
         spPreset.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                com.picoxr.resfix.utils.HapticUtils.triggerHaptic(false, 0);
                 if (position > 0) {
                     applyDimensions(resFloatArr[position - 1]);
                     spPresetSwap.setSelection(0);
@@ -202,6 +207,7 @@ public class AppDetailActivity extends AppCompatActivity {
         spPresetSwap.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                com.picoxr.resfix.utils.HapticUtils.triggerHaptic(false, 0);
                 if (position > 0) {
                     applyDimensions(resDockArr[position - 1]);
                     spPreset.setSelection(0);
@@ -229,6 +235,7 @@ public class AppDetailActivity extends AppCompatActivity {
             spPreset.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
                 @Override
                 public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                    com.picoxr.resfix.utils.HapticUtils.triggerHaptic(false, 0);
                     if (position > 0 && position - 1 < IME_PRESETS.length) {
                         etW.setText(String.valueOf(IME_PRESETS[position - 1][0]));
                         etH.setText(String.valueOf(IME_PRESETS[position - 1][1]));
@@ -242,6 +249,7 @@ public class AppDetailActivity extends AppCompatActivity {
         cardEnable.setOnClickListener(v -> swEnable.toggle());
         cardDock.setOnClickListener(v -> swDock.toggle());
         swDock.setOnCheckedChangeListener((x, checked) -> {
+            com.picoxr.resfix.utils.HapticUtils.triggerHaptic(com.picoxr.resfix.utils.HapticUtils.HapticProfile.TOGGLE, 0, x.getContext());
             if (!loadingCurrent && !isBatchMode()) {
                 preserveDockSelection = true;
                 loadCurrent();
@@ -249,6 +257,7 @@ public class AppDetailActivity extends AppCompatActivity {
         });
 
         swEnable.setOnCheckedChangeListener((x, checked) -> {
+            com.picoxr.resfix.utils.HapticUtils.triggerHaptic(com.picoxr.resfix.utils.HapticUtils.HapticProfile.TOGGLE, 0, x.getContext());
             spPreset.setEnabled(checked);
             spPresetSwap.setEnabled(checked);
             etW.setEnabled(checked); etH.setEnabled(checked); etDensity.setEnabled(checked);
@@ -265,6 +274,20 @@ public class AppDetailActivity extends AppCompatActivity {
             etW.setText(sh);
             etH.setText(sw);
         });
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(cardEnable);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(cardDock);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(swEnable);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(swDock);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(spPreset);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(spPresetSwap);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(btnSave);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(btnSaveAndApply);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(btnRemove);
+        com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(btnSwapVal);
+        View appInfoCard = findViewById(R.id.card_app_info);
+        if (appInfoCard != null) {
+            com.picoxr.resfix.utils.HapticUtils.applyInteractiveHaptic(appInfoCard);
+        }
     }
 
     // Helper method to split the string and set text
@@ -279,10 +302,17 @@ public class AppDetailActivity extends AppCompatActivity {
     @Override
     public boolean onOptionsItemSelected(@NonNull MenuItem item) {
         if (item.getItemId() == android.R.id.home) {
+            com.picoxr.resfix.utils.HapticUtils.triggerHaptic(false, 0);
             finish();
             return true;
         }
         return super.onOptionsItemSelected(item);
+    }
+
+    @Override
+    public void onBackPressed() {
+        com.picoxr.resfix.utils.HapticUtils.triggerHaptic(false, 0);
+        super.onBackPressed();
     }
 
     void loadCurrent() {
@@ -491,6 +521,11 @@ public class AppDetailActivity extends AppCompatActivity {
 
     private void onSaveFinished(boolean ok, boolean batch, List<String> targets,
             String targetPkg, boolean applyAfterSaving) {
+        if (ok) {
+            com.picoxr.resfix.utils.HapticUtils.triggerHaptic(com.picoxr.resfix.utils.HapticUtils.HapticProfile.SUCCESS, 0, this);
+        } else {
+            com.picoxr.resfix.utils.HapticUtils.triggerHaptic(com.picoxr.resfix.utils.HapticUtils.HapticProfile.ERROR, 0, this);
+        }
         String message = imePkg != null
                 ? getString(ok ? R.string.ime_saved_toast : R.string.write_failed)
                 : batch
@@ -541,6 +576,9 @@ public class AppDetailActivity extends AppCompatActivity {
             });
             final boolean removed = ok;
             runOnUiThread(() -> {
+                if (removed) {
+                    com.picoxr.resfix.utils.HapticUtils.triggerHaptic(com.picoxr.resfix.utils.HapticUtils.HapticProfile.ERROR, 0, AppDetailActivity.this);
+                }
                 Toast.makeText(this, getString(removed
                                 ? (imePkg != null ? R.string.ime_removed_toast : R.string.remove_toast)
                                 : R.string.write_failed),
